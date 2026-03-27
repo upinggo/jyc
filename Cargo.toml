@@ -1,6 +1,6 @@
 [package]
 name = "jyc"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 description = "Channel-agnostic AI agent — Rust rewrite of jiny-m"
 
@@ -55,7 +55,7 @@ comrak = "0.37"
 htmd = "0.5"
 
 # SSE (Phase 4)
-# reqwest-eventsource = "0.6"
+reqwest-eventsource = "0.6"
 
 # MCP (Phase 5)
 # rmcp = { version = "0.1", features = ["server", "transport-io"] }

@@ -4,6 +4,9 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+use crate::services::opencode::OpenCodeServer;
+use crate::services::opencode::service::OpenCodeService;
+
 use crate::channels::email::outbound::EmailOutboundAdapter;
 use crate::config::types::MonitorConfig;
 use crate::config::{load_config, validation};
@@ -57,6 +60,7 @@ pub async fn run(args: &MonitorArgs, workdir: &Path) -> Result<()> {
     // 3. Process each email channel
     let mut tasks = Vec::new();
     let agent_config = Arc::new(config.agent.clone());
+    let opencode_server = Arc::new(OpenCodeServer::new());
 
     for (channel_name, channel_config) in &config.channels {
         if channel_config.channel_type != "email" {
@@ -113,12 +117,19 @@ pub async fn run(args: &MonitorArgs, workdir: &Path) -> Result<()> {
         })?;
         tracing::info!(channel = %channel_name, "SMTP connected");
 
+        let opencode_service = Arc::new(OpenCodeService::new(
+            opencode_server.clone(),
+            agent_config.clone(),
+            workdir.to_path_buf(),
+        ));
+
         let thread_manager = Arc::new(ThreadManager::new(
             config.general.max_concurrent_threads,
             config.general.max_queue_size_per_thread,
             storage.clone(),
             outbound.clone(),
             agent_config.clone(),
+            opencode_service,
             cancel.clone(),
         ));
 
@@ -183,6 +194,9 @@ pub async fn run(args: &MonitorArgs, workdir: &Path) -> Result<()> {
     for task in tasks {
         task.await.ok();
     }
+
+    // Stop the OpenCode server
+    opencode_server.stop().await.ok();
 
     tracing::info!("Monitor stopped");
     Ok(())

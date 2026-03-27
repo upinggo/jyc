@@ -84,7 +84,7 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                    Worker (per message)                                   │
+│                    Worker (per message) — ThreadManager                   │
 │                                                                          │
 │  0. If agent.progress enabled: ProgressTracker::start()                  │
 │  1. MessageStorage::store(msg) → messages/<ts>/received.md               │
@@ -92,8 +92,31 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 │  3. CommandRegistry::process_commands(body, ctx)                         │
 │     → parse, execute, strip in single pass → cleaned body + results      │
 │  4. If body empty after commands → direct reply with results, return     │
-│  5. PromptBuilder::build_prompt(msg) → prompt with <reply_context>       │
-│  6. OpenCodeService::generate_reply(msg) — SSE streaming                 │
+│  5. Dispatch to agent mode:                                              │
+│     - "static" → send configured text via OutboundAdapter                │
+│     - "opencode" → OpenCodeService::generate_reply(msg)                  │
+│  6. If agent returns fallback text → send via OutboundAdapter            │
+│  7. ProgressTracker::stop()                                              │
+│  8. Worker picks next message from thread queue                          │
+└────────────────────────┬────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│             OpenCodeService::generate_reply() (agent-specific)           │
+│                                                                          │
+│  1. Ensure OpenCode server is running (auto-start)                       │
+│  2. Setup per-thread opencode.json (model, MCP tools, permissions)       │
+│  3. Get or create session (verify via API, persist .jyc/session.json)    │
+│  4. Clean up stale signal file                                           │
+│  5. Build system prompt (config + directory rules + system.md)            │
+│  6. Build user prompt (history + body + reply_context token)              │
+│  7. Check mode override (plan/build)                                     │
+│  8. Send prompt via SSE streaming (activity timeout, tool detection)      │
+│  9. Handle result → return GenerateReplyResult                           │
+│     - reply_sent_by_tool: true → done                                    │
+│     - ContextOverflow → new session + retry                              │
+│     - Stale session → delete + retry                                     │
+│     - No tool used → return reply_text for fallback                      │
 │                                                                          │
 │  ┌─────────────────────────────────────────┐                            │
 │  │  MCP Tool: reply_message (subprocess)   │                            │
@@ -107,12 +130,8 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 │  │  5. adapter.send_reply(full_reply_text) │                            │
 │  │  6. storage.store_reply(full_reply_text)│                            │
 │  │  7. Write signal file                   │                            │
-│  └──────────────────┬──────────────────────┘                            │
-│                     │                                                    │
-│  7. Fallback: ThreadManager sends via OutboundAdapter                    │
-│  8. ProgressTracker::stop()                                              │
-│  9. Worker picks next message from thread queue                          │
-└─────────────────────┼───────────────────────────────────────────────────┘
+│  └─────────────────────────────────────────┘                            │
+└─────────────────────────────────────────────────────────────────────────┘
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -134,8 +153,8 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 2. **Outbound Adapters** — Channel-specific reply senders (Email/SMTP, FeiShu/API, etc.)
 3. **Channel Registry** — Lookup adapters by channel type (uses `Arc<dyn>` trait objects)
 4. **Message Router** — Delegates matching/naming to adapters, dispatches to thread queues
-5. **Thread Manager** — Per-thread mpsc queues with semaphore-bounded concurrency
-6. **Worker (OpenCode Service)** — AI processing with SSE streaming, session management
+5. **Thread Manager** — Per-thread mpsc queues with semaphore-bounded concurrency. Dispatches to agent services. Handles fallback send if agent returns text instead of sending via tool.
+6. **OpenCode Service** — AI agent: server lifecycle, session management, prompt building, SSE streaming, error recovery. Returns `GenerateReplyResult` to the caller — does NOT send emails.
 7. **Progress Tracker** — Periodic progress update emails during long AI operations
 8. **Prompt Builder** — Builds channel-agnostic prompts from InboundMessage
 9. **MCP Reply Tool** — `reply_message` tool via `rmcp`, routes replies through OutboundAdapter
@@ -802,12 +821,21 @@ Signal (SIGINT/SIGTERM)
        │
        ├──> Alert Service: final flush → send pending errors → exit
        │
-       ├──> OpenCode Service: close server → delete session files
+       ├──> OpenCode Server: explicitly stopped via server.stop()
        │
        └──> SMTP connections: disconnect
 
  All JoinHandles awaited → process exits cleanly
 ```
+
+### OpenCode Server Process Lifecycle on Shutdown
+
+| Scenario | Server killed? | How? |
+|----------|---------------|------|
+| Ctrl+C (graceful) | Yes | `opencode_server.stop()` explicitly kills it during shutdown sequence |
+| jyc panics | Yes | `kill_on_drop(true)` on the child process — Rust drop runs during unwind |
+| SIGTERM to jyc | Yes | Same as panic — drop destructors run |
+| SIGKILL (kill -9) to jyc | **No** — orphan | Destructors don't run. Opencode process stays alive on its ephemeral port. Harmless — next jyc start picks a new port. |
 
 ### Cancellation Token Hierarchy
 
@@ -844,6 +872,48 @@ root_cancel (top-level)
 
 ## Worker (OpenCode Service)
 
+### Responsibility Separation: ThreadManager vs OpenCodeService
+
+The processing pipeline is split into two layers with distinct responsibilities:
+
+**ThreadManager** (`src/core/thread_manager.rs`):
+- Queue management: per-thread mpsc channels, semaphore-bounded concurrency
+- Message storage: store `received.md`, save attachments
+- Command processing: parse/execute/strip email commands (Phase 5)
+- Agent dispatch: routes to the configured agent mode ("static" or "opencode")
+- Fallback send: if agent returns text instead of sending via MCP tool, sends via OutboundAdapter
+- Does NOT know about: sessions, prompts, SSE, signal files, ContextOverflow
+
+**OpenCodeService** (`src/services/opencode/service.rs`):
+- Server lifecycle: ensure OpenCode server is running, health check, auto-restart
+- Thread setup: write per-thread `opencode.json` with model, MCP tools, permissions
+- Session management: get/create/delete sessions, staleness detection
+- Prompt building: system prompt + user prompt + reply_context token
+- SSE streaming: activity timeout, tool detection, progress logging
+- Error recovery: ContextOverflow → new session, stale session → retry
+- Returns `GenerateReplyResult` — does NOT send emails or store replies
+
+```rust
+// ThreadManager dispatches to OpenCodeService:
+let result = opencode_service.generate_reply(
+    message, thread_name, thread_path, message_dir,
+).await?;
+
+// ThreadManager handles the result:
+if !result.reply_sent_by_tool {
+    if let Some(text) = result.reply_text {
+        outbound.send_reply(message, &text, None).await?;
+        storage.store_reply(thread_path, &text, message_dir).await?;
+    }
+}
+```
+
+This separation:
+- Keeps agent-specific logic isolated from queue/concurrency infrastructure
+- Makes it easy to add alternative agent backends (e.g., direct LLM API without OpenCode)
+- Makes ThreadManager testable without a running OpenCode server
+- Keeps the "who sends the reply" decision in one place (ThreadManager)
+
 ### Session-Based Thread Management
 
 Each thread has a dedicated OpenCode session persisted in `session.json`. This enables:
@@ -877,9 +947,43 @@ struct OpenCodeServer {
 
 **Server lifecycle:**
 - Single shared OpenCode server handles all threads
+- Started via `opencode serve --hostname=127.0.0.1 --port=<port>`
+- Readiness detected by parsing stdout for `"opencode server listening on http://..."`
 - Auto-started on first request, auto-finds free port (49152+)
-- Health check before reuse: HTTP ping with 3s timeout
+- Health check before reuse: `GET /session` with 3s timeout
 - Server lives until CLI exits
+
+### OpenCode Server HTTP API Reference
+
+Full API documentation: **https://opencode.ai/docs/server/**
+
+JYC uses the following subset of the OpenCode server API:
+
+| Method | Path | Purpose | Notes |
+|--------|------|---------|-------|
+| `GET` | `/session` | Health check / list sessions | Used for liveness probe |
+| `POST` | `/session` | Create a new session | Body: `{ title }` |
+| `GET` | `/session/:id` | Get session details | Returns 404 if not found |
+| `POST` | `/session/:id/prompt_async` | Send prompt asynchronously | Body: `{ system, agent?, parts }`. Returns 204. |
+| `POST` | `/session/:id/message` | Send prompt and wait (blocking) | Same body format. Returns `{ info, parts }`. |
+| `GET` | `/event` | SSE event stream (global) | First event: `server.connected` |
+
+**Key API conventions:**
+- **Directory context**: Passed via `x-opencode-directory` HTTP header (URL-encoded path), NOT as a query parameter
+- **Model selection**: Configured in per-thread `opencode.json`, NOT passed per-prompt
+- **Prompt body**: `{ system: string, agent?: "plan", parts: [{ type: "text", text: string }] }`
+- **SSE events**: Event type is in the JSON data field as `{ "type": "...", "properties": {...} }` — NOT in the SSE `event:` field
+
+**SSE event types used:**
+
+| Event Type | Purpose | Key Fields |
+|------------|---------|------------|
+| `server.connected` | Stream handshake | — |
+| `message.updated` | Model info | `properties.info.{ sessionID, modelID, providerID }` |
+| `message.part.updated` | Content/tool updates | `properties.part.{ id, sessionID, type, text, tool, state }` |
+| `session.status` | Processing status | `properties.{ sessionID, status.type }` |
+| `session.idle` | Prompt complete | `properties.sessionID` |
+| `session.error` | Session error | `properties.{ sessionID, error.name }` |
 
 **Per-thread configuration:**
 - Each thread gets its own `opencode.json` with model settings, MCP tool config, and permissions
@@ -912,79 +1016,80 @@ struct OpenCodeServer {
 ### Worker Processing Flow
 
 ```
-Worker picks message from thread queue
-       ↓
-MessageStorage::store(msg, thread_name)
-  → creates messages/<timestamp>/ directory
-  → saves allowlisted inbound attachments
-  → writes received.md
-  → returns { message_dir, thread_path }
-       ↓
-CommandRegistry::process_commands(body, ctx)
-  → single pass: parse /commands, execute, strip from body
-  → returns CommandOutput { results, cleaned_body, body_empty }
-  → if body_empty + has results → send_direct_reply(results) → return
-       ↓
-ensure_thread_opencode_setup(thread_path)
-   → reads .jyc/model-override (if exists, takes priority over config)
-   → writes opencode.json with:
-     - model from override or config
-     - MCP config: jiny_reply server
-     - permission: { "*": "allow", "question": "deny" }
-   → staleness check: rewrites if model, tool path, JYC_ROOT, or tools changed
-   → if config changed: restart OpenCode server + create new session
-       ↓
-OpenCodeService::generate_reply(msg, thread_path, message_dir)
-       ↓
-PromptBuilder::build_prompt(msg, thread_path, message_dir)
-  → build_prompt_context(): reads messages/*/ (stripped + truncated)
-  → Incoming message body (stripped)
-  → <reply_context> with channel + channel_metadata + incoming_message_dir
-  → Reply instructions: use reply_message tool
-  → Mode instructions: plan mode vs build mode
-  → Thread-specific system.md (if exists)
-       ↓
-prompt_with_progress() (SSE streaming):
-  1. Subscribe to SSE events ({ directory: thread_path })
-  2. Fire prompt_async() (returns immediately)
-  3. Process events (filtered by session_id, deduped):
-      - server.connected → confirm SSE stream alive
-      - message.updated → capture model_id/provider_id
-      - message.part.updated → accumulate parts, detect tool calls
-      - session.status → track busy/retry (deduped)
-      - session.idle → done, collect result
-      - session.error → handle (ContextOverflow → new session + retry)
-  4. Activity-based timeout: 30 min of silence → timeout (60 min when tool running)
-  5. Progress log every 10s (elapsed, parts, activity, silence)
-       ↓
-OpenCode calls reply_message MCP tool
-       ↓
-MCP Tool (jyc mcp-reply-tool subprocess):
-  1. Decode base64 context token → validate required fields
-  2. Load config from JYC_ROOT/config.toml
-  3. Instantiate OutboundAdapter for context.channel
-  4. Read messages/<incoming_message_dir>/received.md for full body
-  5. Build full_reply_text = AI reply + prepare_body_for_quoting()
-  6. adapter.send_reply(original_message, full_reply_text, attachments)
-  7. MessageStorage::store_reply(full_reply_text) → reply.md
-  8. Write .jyc/reply-sent.flag (signal file)
-       ↓
-Check reply_sent_by_tool:
-  1. SSE parts → tool call detected in real-time
-  2. check_tool_used(accumulated_parts) — post-hoc
-  3. check_signal_file(.jyc/reply-sent.flag) — last-resort fallback
-       ↓
-Stale session detection:
-  If reply_sent_by_tool=true but signal file missing:
-    → Session is stale (OpenCode replayed cached results)
-    → Delete session file, create new session, retry prompt once
-       ↓
-If tool NOT used → ThreadManager fallback:
-  → Get OutboundAdapter for message.channel (shared instance)
-  → adapter.send_reply(message, reply_text, attachments)
-  → storage.store_reply()
-       ↓
-Worker picks next message from thread queue
+┌─ ThreadManager (src/core/thread_manager.rs) ─────────────────────────┐
+│                                                                       │
+│  Worker picks message from thread queue                               │
+│         ↓                                                             │
+│  MessageStorage::store(msg, thread_name)                              │
+│    → creates messages/<timestamp>/ directory                          │
+│    → saves allowlisted inbound attachments                            │
+│    → writes received.md                                               │
+│    → returns { message_dir, thread_path }                             │
+│         ↓                                                             │
+│  CommandRegistry::process_commands(body, ctx)                         │
+│    → single pass: parse /commands, execute, strip from body           │
+│    → returns CommandOutput { results, cleaned_body, body_empty }      │
+│    → if body_empty + has results → send_direct_reply(results) → done  │
+│         ↓                                                             │
+│  Dispatch to agent mode:                                              │
+│    "static" → send configured text → store reply → done               │
+│    "opencode" → OpenCodeService::generate_reply(msg) ──┐              │
+│         ↓                                               │              │
+│  If !result.reply_sent_by_tool:                         │              │
+│    If result.reply_text is Some:                        │              │
+│      → outbound.send_reply(text) — fallback send        │              │
+│      → storage.store_reply(text)                        │              │
+│         ↓                                               │              │
+│  Worker picks next message from thread queue             │              │
+└──────────────────────────────────────────────────────────┘              │
+                                                                         │
+┌─ OpenCodeService (src/services/opencode/service.rs) ──────────────────┘
+│
+│  1. Ensure OpenCode server is running (auto-start, health check)
+│  2. ensure_thread_opencode_setup(thread_path)
+│     → reads .jyc/model-override (if exists, takes priority over config)
+│     → writes opencode.json with model, MCP config, permissions
+│     → staleness check: skip write if unchanged
+│  3. Get or create session (.jyc/session.json)
+│  4. Clean up stale signal file
+│  5. Build system prompt (config + directory boundaries + system.md)
+│  6. Build user prompt (conversation history + body + reply_context)
+│  7. Check mode override (plan/build from .jyc/mode-override)
+│         ↓
+│  prompt_with_sse() (SSE streaming):
+│    1. Subscribe to SSE events ({ directory: thread_path })
+│    2. Fire prompt_async() (returns immediately)
+│    3. Process events (filtered by session_id, deduped):
+│        - server.connected → confirm SSE stream alive
+│        - message.updated → capture model_id/provider_id, log model
+│        - message.part.updated → accumulate parts, detect tool calls
+│        - session.status → track busy/retry (deduped)
+│        - session.idle → done, collect result
+│        - session.error → handle (ContextOverflow → new session + retry)
+│    4. Activity-based timeout: 30 min of silence (60 min when tool running)
+│    5. Progress log every 10s (elapsed, parts, model, activity, silence)
+│         ↓
+│  OpenCode calls reply_message MCP tool
+│         ↓
+│  MCP Tool (jyc mcp-reply-tool subprocess):
+│    1. Decode base64 context token → validate required fields
+│    2. Load config from JYC_ROOT/config.toml
+│    3. Instantiate OutboundAdapter for context.channel
+│    4. Read received.md for full body
+│    5. Build full_reply_text = AI reply + prepare_body_for_quoting()
+│    6. adapter.send_reply(original_message, full_reply_text, attachments)
+│    7. MessageStorage::store_reply(full_reply_text) → reply.md
+│    8. Write .jyc/reply-sent.flag (signal file)
+│         ↓
+│  Handle result → return GenerateReplyResult:
+│    - reply_sent_by_tool: true (SSE tool detection OR signal file) → done
+│    - Stale session (tool reported success, signal file missing)
+│        → delete session, create new, retry once
+│    - ContextOverflow → new session + blocking retry
+│    - SSE failure → blocking prompt fallback
+│    - No tool used → return reply_text for ThreadManager fallback
+│
+└─ Returns GenerateReplyResult to ThreadManager ──────────────────────────
 ```
 
 **Session lifecycle:**
@@ -1539,10 +1644,12 @@ jyc/
 │   ├── services/
 │   │   ├── mod.rs
 │   │   ├── opencode/
-│   │   │   ├── mod.rs
-│   │   │   ├── client.rs              # OpenCode HTTP + SSE
-│   │   │   ├── session.rs             # Session lifecycle
-│   │   │   └── prompt_builder.rs      # Prompt construction
+│   │   │   ├── mod.rs                 # OpenCode server manager (start/stop, port, health)
+│   │   │   ├── service.rs            # OpenCodeService (generate_reply, error recovery)
+│   │   │   ├── client.rs             # OpenCode HTTP + SSE client
+│   │   │   ├── session.rs            # Session + opencode.json + signal file management
+│   │   │   ├── prompt_builder.rs     # Prompt construction + reply_context
+│   │   │   └── types.rs              # API request/response + SSE event types
 │   │   ├── imap/
 │   │   │   ├── mod.rs
 │   │   │   ├── client.rs             # async-imap wrapper

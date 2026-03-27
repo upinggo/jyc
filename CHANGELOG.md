@@ -2,6 +2,40 @@
 
 All notable changes to JYC will be documented in this file.
 
+## [0.0.2] - 2026-03-27
+
+### Added
+
+**Phase 4: AI Integration**
+- OpenCode server manager: auto-start `opencode serve`, free port discovery, stdout-based readiness detection, health check, graceful shutdown with `kill_on_drop`
+- OpenCode HTTP client: `create_session`, `get_session`, `prompt_async`, `prompt_blocking` with `x-opencode-directory` header and `?directory=` query param
+- SSE streaming: subscribe to `/event?directory=`, parse events from JSON `{"type": "...", "properties": {...}}` format, activity-based timeout (30min default, 60min when tool running), progress logging with model info
+- SSE event handling: `server.connected`, `server.heartbeat`, `message.updated` (model/provider capture), `message.part.updated` (tool state tracking), `session.status`, `session.idle`, `session.error`
+- Session management: per-thread `.jyc/session.json`, fresh session per prompt (avoids stale sessions across server restarts), `opencode.json` generation with staleness check
+- Prompt builder: system prompt (config + directory boundaries + reply instructions + system.md), user prompt (conversation history + incoming body + base64 reply_context token)
+- OpenCodeService (`src/services/opencode/service.rs`): encapsulates all AI logic — server lifecycle, sessions, prompts, SSE, error recovery. Returns `GenerateReplyResult` to ThreadManager.
+- ContextOverflow recovery: delete session, create new, retry with blocking prompt
+- Stale session detection: tool reported success in SSE but signal file missing → delete + retry
+- Fallback reply with quoted history: `build_full_reply_text()` shared function for both fallback and future MCP reply tool
+- Prompt echo stripping: removes `## Incoming Message`, `<reply_context>`, `## Conversation history` markers from AI output when tool fails
+
+**Architecture: ThreadManager ↔ OpenCodeService separation**
+- ThreadManager: queue management, concurrency control, agent mode dispatch, fallback send
+- OpenCodeService: AI-specific logic isolated from infrastructure. Does NOT send emails.
+
+### Changed
+- IMAP ID command: now logs `server_name`, `server_vendor`, `trans_id` as structured fields (no raw map dump)
+- IMAP monitor: backoff on SELECT failure (was tight retry loop)
+- DESIGN.md: added OpenCode Server HTTP API reference (https://opencode.ai/docs/server/), responsibility separation docs, updated Worker Processing Flow diagram, OpenCode server shutdown lifecycle table
+
+### Fixed
+- IMAP `SELECT INBOX` rejected by 163.com with "Unsafe Login" — added RFC 2971 ID command after login
+- OpenCode server command: `opencode server` → `opencode serve` with `--hostname=` / `--port=` syntax
+- OpenCode server readiness: detect by parsing stdout for `"opencode server listening on http://..."` instead of HTTP polling
+- SSE event parsing: event type is in JSON `data.type` field, not SSE `event:` field
+- SSE subscription: added `?directory=` query param to scope events to thread project context
+- Explicit `opencode_server.stop()` on graceful shutdown
+
 ## [0.0.1] - 2026-03-27
 
 ### Added

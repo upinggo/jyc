@@ -82,7 +82,15 @@ impl ImapClient {
             .await;
         match id_result {
             Ok(Some(server_id)) => {
-                tracing::debug!(server_id = ?server_id, "IMAP ID exchanged");
+                let name = server_id.get("name").map(|s| s.as_str()).unwrap_or("unknown");
+                let vendor = server_id.get("vendor").map(|s| s.as_str()).unwrap_or("unknown");
+                let trans_id = server_id.get("TransID").map(|s| s.as_str()).unwrap_or("-");
+                tracing::debug!(
+                    server_name = %name,
+                    server_vendor = %vendor,
+                    trans_id = %trans_id,
+                    "IMAP ID exchanged"
+                );
             }
             Ok(None) => {
                 tracing::debug!("IMAP ID sent, server returned NIL");

@@ -294,21 +294,268 @@ pub fn format_datetime_iso(dt: &chrono::DateTime<chrono::Utc>) -> String {
 }
 
 /// Format a single quoted reply entry for inclusion in an email.
+///
+/// Matches jiny-m's format:
+/// ```text
+/// ---
+/// ### Sender Name (2026-03-27 10:00)
+/// > Subject
+/// >
+/// > Body text quoted...
+/// ```
+///
+/// Returns empty string if body_text is empty.
 pub fn format_quoted_reply(
     sender: &str,
     timestamp: &str,
-    _subject: &str,
+    subject: &str,
     body_text: &str,
 ) -> String {
-    let mut result = format!("### {sender} ({timestamp})\n\n");
-
-    for line in body_text.lines() {
-        result.push_str("> ");
-        result.push_str(line);
-        result.push('\n');
+    if body_text.trim().is_empty() {
+        return String::new();
     }
 
-    result
+    // Clean sender display name
+    let from_name = if sender.contains('<') {
+        sender
+            .split('<')
+            .next()
+            .unwrap_or(sender)
+            .trim()
+            .trim_matches(|c| c == '\'' || c == '"')
+            .to_string()
+    } else {
+        sender.to_string()
+    };
+    let from_name = if from_name.is_empty() {
+        sender.to_string()
+    } else {
+        from_name
+    };
+
+    let mut lines = Vec::new();
+    lines.push("---".to_string());
+    lines.push(format!("### {from_name} ({timestamp})"));
+
+    if !subject.is_empty() {
+        lines.push(format!("> {subject}"));
+    }
+
+    lines.push(String::new());
+
+    for line in body_text.lines() {
+        lines.push(format!("> {line}"));
+    }
+
+    lines.join("\n")
+}
+
+// --- Thread Trail & Reply Building ---
+
+/// A single entry in a thread trail (for building quoted history).
+#[derive(Debug)]
+pub struct TrailEntry {
+    pub sender: String,
+    pub timestamp: String,
+    pub topic: String,
+    pub body_text: String,
+    /// "received" or "reply"
+    pub entry_type: String,
+}
+
+/// Build a thread trail from stored messages.
+///
+/// Reads message directories in reverse chronological order (newest first).
+/// For each directory, reads reply.md (AI response) then received.md (user message).
+/// The current message directory is excluded.
+///
+/// Trail order: current received → prev reply → prev received → older reply → ...
+pub async fn build_thread_trail(
+    thread_path: &std::path::Path,
+    current_message: Option<TrailCurrentMessage>,
+    max_entries: usize,
+    exclude_message_dir: Option<&str>,
+) -> Vec<TrailEntry> {
+    let mut trail = Vec::new();
+
+    // Prepend current message (stripped) if provided
+    if let Some(ref current) = current_message {
+        let stripped = strip_quoted_history(&current.body_text);
+        trail.push(TrailEntry {
+            sender: current.sender.clone(),
+            timestamp: current.timestamp.clone(),
+            topic: current.topic.clone(),
+            body_text: stripped,
+            entry_type: "received".to_string(),
+        });
+    }
+
+    let messages_dir = thread_path.join("messages");
+    if !messages_dir.exists() {
+        return trail;
+    }
+
+    // Read and sort message directories (newest first)
+    let mut dirs: Vec<String> = Vec::new();
+    if let Ok(mut entries) = tokio::fs::read_dir(&messages_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if let Ok(ft) = entry.file_type().await {
+                if ft.is_dir() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !name.starts_with('.') {
+                        dirs.push(name);
+                    }
+                }
+            }
+        }
+    }
+    dirs.sort();
+    dirs.reverse(); // newest first
+
+    // Exclude current message dir
+    if let Some(exclude) = exclude_message_dir {
+        dirs.retain(|d| d != exclude);
+    } else if current_message.is_some() && !dirs.is_empty() {
+        // Assume most recent is the current message, skip it
+        dirs.remove(0);
+    }
+
+    for dir_name in &dirs {
+        if trail.len() >= max_entries {
+            break;
+        }
+
+        let dir_path = messages_dir.join(dir_name);
+
+        // Reply first (more recent — AI responded after receiving)
+        if trail.len() < max_entries {
+            if let Ok(content) = tokio::fs::read_to_string(dir_path.join("reply.md")).await {
+                let reply_text = parse_stored_reply(&content);
+                if !reply_text.trim().is_empty() {
+                    trail.push(TrailEntry {
+                        sender: "AI Assistant".to_string(),
+                        timestamp: dir_name.clone(),
+                        topic: String::new(),
+                        body_text: reply_text,
+                        entry_type: "reply".to_string(),
+                    });
+                }
+            }
+        }
+
+        // Then received
+        if trail.len() < max_entries {
+            if let Ok(content) = tokio::fs::read_to_string(dir_path.join("received.md")).await {
+                let parsed = parse_stored_message(&content);
+                let stripped = strip_quoted_history(&parsed.body);
+                if !stripped.trim().is_empty() {
+                    trail.push(TrailEntry {
+                        sender: parsed.sender.unwrap_or_else(|| "Unknown".to_string()),
+                        timestamp: parsed.timestamp.unwrap_or_else(|| dir_name.clone()),
+                        topic: parsed.topic.unwrap_or_default(),
+                        body_text: stripped,
+                        entry_type: "received".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    trail.truncate(max_entries);
+    trail
+}
+
+/// Current message info for building the thread trail.
+pub struct TrailCurrentMessage {
+    pub sender: String,
+    pub timestamp: String,
+    pub topic: String,
+    pub body_text: String,
+}
+
+/// Prepare quoted history for a reply.
+///
+/// Builds a thread trail and formats each entry as a quoted block.
+/// Returns the combined quoted history string (empty if no messages).
+pub async fn prepare_body_for_quoting(
+    thread_path: &std::path::Path,
+    current_message: TrailCurrentMessage,
+    max_history: Option<usize>,
+    exclude_message_dir: Option<&str>,
+) -> String {
+    let trail = build_thread_trail(
+        thread_path,
+        Some(current_message),
+        max_history.unwrap_or(crate::utils::constants::MAX_HISTORY_QUOTE),
+        exclude_message_dir,
+    )
+    .await;
+
+    let quoted_blocks: Vec<String> = trail
+        .iter()
+        .filter_map(|entry| {
+            let quoted =
+                format_quoted_reply(&entry.sender, &entry.timestamp, &entry.topic, &entry.body_text);
+            if quoted.is_empty() {
+                None
+            } else {
+                Some(quoted)
+            }
+        })
+        .collect();
+
+    quoted_blocks.join("\n\n")
+}
+
+/// Build the full reply text with quoted history.
+///
+/// This is the single reply formatting function used by BOTH:
+/// - ThreadManager fallback (when MCP tool wasn't used)
+/// - MCP reply tool (Phase 5)
+///
+/// Format:
+/// ```text
+/// <AI reply text>
+///
+/// ---
+/// ### Sender Name (2026-03-27 10:00)
+/// > Subject
+/// >
+/// > Message body quoted...
+///
+/// ---
+/// ### AI Assistant (2026-03-27 09:55)
+/// > Previous AI reply quoted...
+/// ```
+pub async fn build_full_reply_text(
+    reply_text: &str,
+    thread_path: &std::path::Path,
+    sender: &str,
+    timestamp: &str,
+    topic: &str,
+    body_text: &str,
+    message_dir: &str,
+) -> String {
+    let current_message = TrailCurrentMessage {
+        sender: sender.to_string(),
+        timestamp: timestamp.to_string(),
+        topic: topic.to_string(),
+        body_text: body_text.to_string(),
+    };
+
+    let quoted_history = prepare_body_for_quoting(
+        thread_path,
+        current_message,
+        None,
+        Some(message_dir),
+    )
+    .await;
+
+    if quoted_history.is_empty() {
+        reply_text.to_string()
+    } else {
+        format!("{reply_text}\n\n{quoted_history}")
+    }
 }
 
 #[cfg(test)]
@@ -529,8 +776,23 @@ Hello, I need help with X.
     #[test]
     fn test_format_quoted_reply() {
         let result = format_quoted_reply("John", "2026-03-22 14:30", "Topic", "Hello\nWorld");
+        assert!(result.contains("---"));
         assert!(result.contains("### John (2026-03-22 14:30)"));
+        assert!(result.contains("> Topic"));
         assert!(result.contains("> Hello"));
         assert!(result.contains("> World"));
+    }
+
+    #[test]
+    fn test_format_quoted_reply_empty_body() {
+        let result = format_quoted_reply("John", "2026-03-22 14:30", "Topic", "");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_format_quoted_reply_sender_with_brackets() {
+        let result = format_quoted_reply("John <john@example.com>", "2026-03-22 14:30", "", "Hi");
+        assert!(result.contains("### John (2026-03-22 14:30)"));
+        assert!(!result.contains("<john@example.com>"));
     }
 }

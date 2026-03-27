@@ -10,6 +10,7 @@ use crate::channels::types::{AttachmentConfig, InboundMessage, PatternMatch};
 use crate::config::types::AgentConfig;
 use crate::core::email_parser;
 use crate::core::message_storage::{MessageStorage, StoreResult};
+use crate::services::opencode::service::OpenCodeService;
 
 /// An item in a thread's message queue.
 struct QueueItem {
@@ -28,27 +29,20 @@ pub struct QueueStats {
 
 /// Manages per-thread message queues with bounded concurrency.
 ///
-/// Each thread gets its own mpsc channel (FIFO within a conversation).
-/// A tokio Semaphore limits the number of concurrent worker tasks.
+/// Responsible for: queue management, concurrency control, dispatching to the right agent mode.
+/// NOT responsible for: AI logic, sessions, prompts — those live in `OpenCodeService`.
 pub struct ThreadManager {
-    /// Per-thread bounded mpsc senders
     thread_queues: Mutex<HashMap<String, mpsc::Sender<QueueItem>>>,
-
-    /// Bounds concurrent thread workers
     semaphore: Arc<Semaphore>,
-
-    /// Configuration
     max_queue_size: usize,
 
-    /// Shared dependencies
+    // Shared dependencies
     storage: Arc<MessageStorage>,
     outbound: Arc<EmailOutboundAdapter>,
     agent_config: Arc<AgentConfig>,
+    opencode_service: Arc<OpenCodeService>,
 
-    /// Graceful shutdown
     cancel: CancellationToken,
-
-    /// Worker join handles for cleanup
     worker_handles: Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -59,6 +53,7 @@ impl ThreadManager {
         storage: Arc<MessageStorage>,
         outbound: Arc<EmailOutboundAdapter>,
         agent_config: Arc<AgentConfig>,
+        opencode_service: Arc<OpenCodeService>,
         cancel: CancellationToken,
     ) -> Self {
         Self {
@@ -68,15 +63,13 @@ impl ThreadManager {
             storage,
             outbound,
             agent_config,
+            opencode_service,
             cancel,
             worker_handles: Mutex::new(Vec::new()),
         }
     }
 
     /// Enqueue a message for processing in the given thread.
-    ///
-    /// If the thread's queue doesn't exist, creates it and spawns a worker.
-    /// If the queue is full, the message is dropped with a warning.
     pub async fn enqueue(
         &self,
         message: InboundMessage,
@@ -92,7 +85,6 @@ impl ThreadManager {
             attachment_config,
         };
 
-        // Try to send to existing thread queue
         if let Some(sender) = queues.get(&thread_name) {
             match sender.try_send(item) {
                 Ok(()) => {
@@ -100,26 +92,18 @@ impl ThreadManager {
                     return;
                 }
                 Err(mpsc::error::TrySendError::Full(_)) => {
-                    tracing::warn!(
-                        thread = %thread_name,
-                        "Queue full, dropping message"
-                    );
+                    tracing::warn!(thread = %thread_name, "Queue full, dropping message");
                     return;
                 }
                 Err(mpsc::error::TrySendError::Closed(item)) => {
-                    // Worker finished, remove stale queue and recreate below
                     queues.remove(&thread_name);
-                    // Re-send below after creating new queue
-                    self.create_and_enqueue(&mut queues, thread_name, item)
-                        .await;
+                    self.create_and_enqueue(&mut queues, thread_name, item).await;
                     return;
                 }
             }
         }
 
-        // No existing queue — create one
-        self.create_and_enqueue(&mut queues, thread_name, item)
-            .await;
+        self.create_and_enqueue(&mut queues, thread_name, item).await;
     }
 
     async fn create_and_enqueue(
@@ -146,13 +130,13 @@ impl ThreadManager {
         let storage = self.storage.clone();
         let outbound = self.outbound.clone();
         let agent_config = self.agent_config.clone();
+        let opencode_service = self.opencode_service.clone();
 
         tokio::spawn(async move {
-            // Acquire semaphore permit (blocks if all workers busy)
             let _permit = tokio::select! {
                 permit = semaphore.acquire_owned() => match permit {
                     Ok(p) => p,
-                    Err(_) => return, // Semaphore closed
+                    Err(_) => return,
                 },
                 _ = cancel.cancelled() => return,
             };
@@ -163,7 +147,7 @@ impl ThreadManager {
                 let item = tokio::select! {
                     item = rx.recv() => match item {
                         Some(item) => item,
-                        None => break, // Channel closed, queue drained
+                        None => break,
                     },
                     _ = cancel.cancelled() => {
                         tracing::info!(thread = %thread_name, "Worker cancelled");
@@ -177,9 +161,8 @@ impl ThreadManager {
                     &storage,
                     &outbound,
                     &agent_config,
-                )
-                .await
-                {
+                    &opencode_service,
+                ).await {
                     tracing::error!(
                         thread = %thread_name,
                         error = %e,
@@ -189,57 +172,46 @@ impl ThreadManager {
             }
 
             tracing::info!(thread = %thread_name, "Worker finished");
-            // _permit dropped here → semaphore slot freed
         })
     }
 
-    /// Get current queue statistics.
     pub async fn get_stats(&self) -> QueueStats {
         let queues = self.thread_queues.lock().await;
         let total_threads = queues.len();
         let active_workers = self.semaphore.available_permits();
-        let max = total_threads; // rough estimate
-
         QueueStats {
-            active_workers: max.saturating_sub(active_workers),
+            active_workers: total_threads.saturating_sub(active_workers),
             total_threads,
-            pending_messages: 0, // Can't peek into mpsc channels
+            pending_messages: 0,
         }
     }
 
-    /// Wait for all workers to finish (for graceful shutdown).
     pub async fn shutdown(&self) {
         self.cancel.cancel();
-
-        // Close all sender channels to signal workers
         {
             let mut queues = self.thread_queues.lock().await;
             queues.clear();
         }
-
-        // Wait for all worker tasks
         let mut handles = self.worker_handles.lock().await;
         for handle in handles.drain(..) {
             let _ = handle.await;
         }
-
         tracing::info!("All workers shut down");
     }
 }
 
 /// Process a single message within a worker.
 ///
-/// Current flow (Phase 3 — no AI yet):
 /// 1. Store the inbound message
-/// 2. If agent enabled with static mode → send static reply
-/// 3. If agent enabled with opencode mode → log placeholder (Phase 4)
-/// 4. If agent disabled → just store
+/// 2. Dispatch to the configured agent mode (static / opencode)
+/// 3. If agent returns fallback text → send via outbound + store reply
 async fn process_message(
     item: &QueueItem,
     thread_name: &str,
     storage: &MessageStorage,
     outbound: &EmailOutboundAdapter,
     agent_config: &AgentConfig,
+    opencode_service: &OpenCodeService,
 ) -> Result<()> {
     let message = &item.message;
 
@@ -256,13 +228,12 @@ async fn process_message(
         "Message stored, processing..."
     );
 
-    // 2. Check if agent is enabled
     if !agent_config.enabled {
         tracing::info!(thread = %thread_name, "Agent disabled, skipping reply");
         return Ok(());
     }
 
-    // 3. Handle reply mode
+    // 2. Dispatch to agent mode
     match agent_config.mode.as_str() {
         "static" => {
             let reply_text = agent_config
@@ -270,54 +241,90 @@ async fn process_message(
                 .as_deref()
                 .unwrap_or("Thank you for your message. We will get back to you soon.");
 
-            outbound.send_reply(message, reply_text, None).await?;
+            let body_text = message
+                .content
+                .text
+                .as_deref()
+                .or(message.content.markdown.as_deref())
+                .unwrap_or("");
 
+            let full_reply = email_parser::build_full_reply_text(
+                reply_text,
+                &store_result.thread_path,
+                &message.sender,
+                &message.timestamp.to_rfc3339(),
+                &message.topic,
+                body_text,
+                &store_result.message_dir,
+            )
+            .await;
+
+            outbound.send_reply(message, &full_reply, None).await?;
             storage
-                .store_reply(
-                    &store_result.thread_path,
-                    reply_text,
-                    &store_result.message_dir,
-                )
+                .store_reply(&store_result.thread_path, &full_reply, &store_result.message_dir)
                 .await?;
 
-            tracing::info!(
-                thread = %thread_name,
-                "Static reply sent"
-            );
+            tracing::info!(thread = %thread_name, "Static reply sent");
         }
+
         "opencode" => {
-            // Phase 4: AI integration
-            tracing::info!(
-                thread = %thread_name,
-                "OpenCode mode — AI reply not yet implemented (Phase 4)"
-            );
-
-            // For now, send a placeholder reply so the pipeline is testable
-            let reply_text = format!(
-                "**[JYC]** Message received and stored.\n\n\
-                 > **From:** {}\n\
-                 > **Subject:** {}\n\
-                 > **Thread:** {}\n\n\
-                 AI processing will be available in Phase 4.",
-                message.sender_address, message.topic, thread_name
-            );
-
-            outbound.send_reply(message, &reply_text, None).await?;
-
-            storage
-                .store_reply(
+            let result = opencode_service
+                .generate_reply(
+                    message,
+                    thread_name,
                     &store_result.thread_path,
-                    &reply_text,
                     &store_result.message_dir,
                 )
                 .await?;
+
+            // 3. If tool didn't send the reply, do fallback send
+            if !result.reply_sent_by_tool {
+                if let Some(ref text) = result.reply_text {
+                    tracing::info!(
+                        thread = %thread_name,
+                        text_len = text.len(),
+                        "Fallback: building full reply with quoted history"
+                    );
+
+                    let body_text = message
+                        .content
+                        .text
+                        .as_deref()
+                        .or(message.content.markdown.as_deref())
+                        .unwrap_or("");
+
+                    let full_reply = email_parser::build_full_reply_text(
+                        text,
+                        &store_result.thread_path,
+                        &message.sender,
+                        &message.timestamp.to_rfc3339(),
+                        &message.topic,
+                        body_text,
+                        &store_result.message_dir,
+                    )
+                    .await;
+
+                    outbound.send_reply(message, &full_reply, None).await?;
+                    storage
+                        .store_reply(
+                            &store_result.thread_path,
+                            &full_reply,
+                            &store_result.message_dir,
+                        )
+                        .await?;
+
+                    tracing::info!(thread = %thread_name, "Fallback reply sent");
+                } else {
+                    tracing::warn!(
+                        thread = %thread_name,
+                        "No reply text from AI, skipping fallback send"
+                    );
+                }
+            }
         }
+
         other => {
-            tracing::warn!(
-                thread = %thread_name,
-                mode = %other,
-                "Unknown agent mode"
-            );
+            tracing::warn!(thread = %thread_name, mode = %other, "Unknown agent mode");
         }
     }
 

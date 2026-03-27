@@ -1,0 +1,172 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+// --- API Request/Response Types ---
+
+/// Body for session creation.
+#[derive(Debug, Serialize)]
+pub struct CreateSessionRequest {
+    pub title: String,
+}
+
+/// Body for prompt requests (both async and blocking).
+#[derive(Debug, Serialize)]
+pub struct PromptRequest {
+    pub system: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    pub parts: Vec<PromptPart>,
+}
+
+/// A single part in a prompt request.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+pub enum PromptPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+}
+
+/// Session info returned by the API.
+#[derive(Debug, Deserialize)]
+pub struct SessionInfo {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// Response from blocking prompt.
+#[derive(Debug, Deserialize)]
+pub struct PromptResponse {
+    pub data: Option<PromptResponseData>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PromptResponseData {
+    #[serde(default)]
+    pub parts: Vec<ResponsePart>,
+    #[serde(default)]
+    pub info: Option<ResponseInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResponseInfo {
+    pub error: Option<ResponseError>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResponseError {
+    pub name: String,
+    #[serde(default)]
+    pub data: Option<HashMap<String, serde_json::Value>>,
+}
+
+// --- SSE Event Types ---
+
+/// A parsed SSE event from the OpenCode event stream.
+#[derive(Debug, Deserialize)]
+pub struct SseEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    #[serde(default)]
+    pub properties: serde_json::Value,
+}
+
+/// A message part from SSE `message.part.updated` events.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ResponsePart {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default, rename = "sessionID")]
+    pub session_id: Option<String>,
+    #[serde(rename = "type")]
+    pub part_type: String,
+    // Text part
+    #[serde(default)]
+    pub text: Option<String>,
+    // Tool part
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub state: Option<ToolState>,
+    // Step-finish part
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub cost: Option<f64>,
+    #[serde(default)]
+    pub tokens: Option<serde_json::Value>,
+}
+
+/// State of a tool invocation.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ToolState {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+    #[serde(default)]
+    pub output: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Message info from `message.updated` events.
+#[derive(Debug, Deserialize)]
+pub struct MessageInfo {
+    #[serde(default, rename = "sessionID")]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default, rename = "providerID")]
+    pub provider_id: Option<String>,
+    #[serde(default, rename = "modelID")]
+    pub model_id: Option<String>,
+}
+
+/// Session status from `session.status` events.
+#[derive(Debug, Deserialize)]
+pub struct SessionStatus {
+    #[serde(rename = "sessionID")]
+    pub session_id: String,
+    pub status: SessionStatusDetail,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SessionStatusDetail {
+    #[serde(rename = "type")]
+    pub status_type: String,
+    #[serde(default)]
+    pub attempt: Option<u32>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Session error from `session.error` events.
+#[derive(Debug, Deserialize)]
+pub struct SessionError {
+    #[serde(rename = "sessionID")]
+    pub session_id: String,
+    pub error: SessionErrorDetail,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SessionErrorDetail {
+    pub name: String,
+    #[serde(default)]
+    pub data: Option<HashMap<String, serde_json::Value>>,
+}
+
+// --- Result types ---
+
+/// Result of AI reply generation.
+#[derive(Debug)]
+pub struct GenerateReplyResult {
+    /// Whether the reply was sent by the MCP tool (vs fallback)
+    pub reply_sent_by_tool: bool,
+    /// Accumulated text from the AI (for fallback direct send)
+    pub reply_text: Option<String>,
+    /// Model used for generation
+    pub model_id: Option<String>,
+    /// Provider used
+    pub provider_id: Option<String>,
+}

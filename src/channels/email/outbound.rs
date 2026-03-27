@@ -1,25 +1,33 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use crate::channels::types::{InboundMessage, OutboundAttachment, SendResult};
 use crate::config::types::SmtpConfig;
+use crate::core::email_parser;
+use crate::core::message_storage::MessageStorage;
 use crate::services::smtp::client::{EmailAttachment, SmtpClient};
 
-/// Email outbound adapter — sends replies, alerts, and progress updates via SMTP.
+/// Email outbound adapter — owns the full reply lifecycle: format + send + store.
 ///
-/// Wraps SmtpClient and implements the OutboundAdapter interface.
-/// Designed to be shared (via Arc) across ThreadManager, AlertService, and MCP reply tool.
+/// Responsibilities:
+/// - Build email-formatted reply with quoted history (channel-specific)
+/// - Send via SMTP with threading headers and attachments
+/// - Store reply.md
+///
+/// This is the channel-specific component. The agent (OpenCodeService) and
+/// ThreadManager are channel-agnostic — they pass raw AI text to this adapter.
 pub struct EmailOutboundAdapter {
     smtp: Arc<Mutex<SmtpClient>>,
+    storage: Arc<MessageStorage>,
     from_address: String,
     from_name: Option<String>,
 }
 
 impl EmailOutboundAdapter {
-    pub fn new(config: &SmtpConfig) -> Self {
+    pub fn new(config: &SmtpConfig, storage: Arc<MessageStorage>) -> Self {
         let from_address = config
             .from_address
             .clone()
@@ -28,6 +36,7 @@ impl EmailOutboundAdapter {
 
         Self {
             smtp: Arc::new(Mutex::new(SmtpClient::new(config.clone()))),
+            storage,
             from_address,
             from_name,
         }
@@ -45,60 +54,57 @@ impl EmailOutboundAdapter {
     }
 
     /// Send a reply to an inbound message.
+    ///
+    /// Owns the full reply lifecycle:
+    /// 1. Build email-formatted reply with quoted history
+    /// 2. Send via SMTP with threading headers + attachments
+    /// 3. Store reply.md
     pub async fn send_reply(
         &self,
         original: &InboundMessage,
         reply_text: &str,
+        thread_path: &Path,
+        message_dir: &str,
         attachments: Option<&[OutboundAttachment]>,
     ) -> Result<SendResult> {
-        let mut smtp = self.smtp.lock().await;
+        // 1. Build full reply with email-specific quoted history
+        let body_text = original
+            .content
+            .text
+            .as_deref()
+            .or(original.content.markdown.as_deref())
+            .unwrap_or("");
 
-        // Build references: original's References + original's Message-ID
-        let mut refs: Vec<String> = original
-            .thread_refs
-            .clone()
-            .unwrap_or_default();
-        if let Some(ref ext_id) = original.external_id {
-            refs.push(ext_id.clone());
-        }
+        let full_reply = email_parser::build_full_reply_text(
+            reply_text,
+            thread_path,
+            &original.sender,
+            &original.timestamp.to_rfc3339(),
+            &original.topic,
+            body_text,
+            message_dir,
+        )
+        .await;
 
-        // Load attachment files into EmailAttachment structs
-        let email_attachments = if let Some(atts) = attachments {
-            let mut loaded = Vec::new();
-            for att in atts {
-                let data = tokio::fs::read(&att.path).await?;
-                loaded.push(EmailAttachment {
-                    filename: att.filename.clone(),
-                    content_type: att.content_type.clone(),
-                    data,
-                });
-            }
-            Some(loaded)
-        } else {
-            None
-        };
-
-        let message_id = smtp
-            .send_reply(
-                &self.from_address,
-                self.from_name.as_deref(),
-                &original.sender_address,
-                &original.topic,
-                reply_text,
-                original.external_id.as_deref(),
-                if refs.is_empty() {
-                    None
-                } else {
-                    Some(&refs)
-                },
-                email_attachments.as_deref(),
-            )
+        // 2. Send via SMTP
+        let send_result = self
+            .smtp_send(original, &full_reply, attachments)
             .await?;
 
-        Ok(SendResult { message_id })
+        // 3. Store reply.md
+        self.storage
+            .store_reply(thread_path, &full_reply, message_dir)
+            .await?;
+
+        tracing::debug!(
+            message_dir = %message_dir,
+            "Reply stored"
+        );
+
+        Ok(send_result)
     }
 
-    /// Send a fresh alert email (not a reply, no threading headers).
+    /// Send a fresh alert email (not a reply, no formatting/threading/storage).
     pub async fn send_alert(
         &self,
         recipient: &str,
@@ -132,7 +138,6 @@ impl EmailOutboundAdapter {
             minutes, seconds, activity
         );
 
-        // Send as a threaded reply
         let mut smtp = self.smtp.lock().await;
         let mut refs: Vec<String> = original
             .thread_refs
@@ -150,20 +155,59 @@ impl EmailOutboundAdapter {
                 &subject,
                 &body,
                 original.external_id.as_deref(),
-                if refs.is_empty() {
-                    None
-                } else {
-                    Some(&refs)
-                },
-                None, // No attachments for progress updates
+                if refs.is_empty() { None } else { Some(&refs) },
+                None,
             )
             .await?;
 
         Ok(SendResult { message_id })
     }
 
-    /// Get a clone of the inner SmtpClient (for MCP reply tool to create its own).
-    pub fn smtp_client(&self) -> Arc<Mutex<SmtpClient>> {
-        self.smtp.clone()
+    /// Internal: send via SMTP with threading headers and attachments.
+    async fn smtp_send(
+        &self,
+        original: &InboundMessage,
+        full_reply: &str,
+        attachments: Option<&[OutboundAttachment]>,
+    ) -> Result<SendResult> {
+        let mut smtp = self.smtp.lock().await;
+
+        let mut refs: Vec<String> = original
+            .thread_refs
+            .clone()
+            .unwrap_or_default();
+        if let Some(ref ext_id) = original.external_id {
+            refs.push(ext_id.clone());
+        }
+
+        let email_attachments = if let Some(atts) = attachments {
+            let mut loaded = Vec::new();
+            for att in atts {
+                let data = tokio::fs::read(&att.path).await?;
+                loaded.push(EmailAttachment {
+                    filename: att.filename.clone(),
+                    content_type: att.content_type.clone(),
+                    data,
+                });
+            }
+            Some(loaded)
+        } else {
+            None
+        };
+
+        let message_id = smtp
+            .send_reply(
+                &self.from_address,
+                self.from_name.as_deref(),
+                &original.sender_address,
+                &original.topic,
+                full_reply,
+                original.external_id.as_deref(),
+                if refs.is_empty() { None } else { Some(&refs) },
+                email_attachments.as_deref(),
+            )
+            .await?;
+
+        Ok(SendResult { message_id })
     }
 }

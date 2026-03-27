@@ -13,6 +13,7 @@ use crate::channels::types::OutboundAttachment;
 use crate::config;
 use crate::core::email_parser;
 use crate::core::message_storage::MessageStorage;
+use std::sync::Arc;
 
 const EXCLUDED_DIRS: &[&str] = &[".opencode", ".jyc"];
 
@@ -186,19 +187,7 @@ async fn handle_reply(
         sender, sender_address, topic, parsed.body.len()
     ));
 
-    // 7. Build full reply text — uses the shared build_full_reply_text()
-    let full_reply = email_parser::build_full_reply_text(
-        message,
-        thread_path,
-        &sender,
-        &timestamp,
-        &topic,
-        &parsed.body,
-        &ctx.incoming_message_dir,
-    )
-    .await;
-
-    // 8. Create outbound adapter and send
+    // 7. Create outbound adapter (with storage for reply lifecycle)
     let channel_config = app_config
         .channels
         .get(&ctx.channel)
@@ -209,10 +198,13 @@ async fn handle_reply(
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("no outbound config for channel '{}'", ctx.channel))?;
 
-    let outbound = EmailOutboundAdapter::new(smtp_config);
+    let storage = Arc::new(MessageStorage::new(
+        thread_path.parent().unwrap_or(thread_path),
+    ));
+    let outbound = EmailOutboundAdapter::new(smtp_config, storage);
     outbound.connect().await?;
 
-    // Reconstruct InboundMessage from stored metadata (not from token)
+    // 8. Reconstruct InboundMessage from stored metadata
     let original = crate::channels::types::InboundMessage {
         id: uuid::Uuid::new_v4().to_string(),
         channel: ctx.channel.clone(),
@@ -221,7 +213,10 @@ async fn handle_reply(
         sender_address: sender_address.clone(),
         recipients: vec![],
         topic: topic.clone(),
-        content: crate::channels::types::MessageContent::default(),
+        content: crate::channels::types::MessageContent {
+            text: Some(parsed.body.clone()),
+            ..Default::default()
+        },
         timestamp: chrono::Utc::now(),
         thread_refs: thread_refs,
         reply_to_id: None,
@@ -230,11 +225,6 @@ async fn handle_reply(
         metadata: std::collections::HashMap::new(),
         matched_pattern: None,
     };
-
-    logger.log("INFO", &format!(
-        "Sending reply: channel={}, recipient={}, len={}, attachments={}",
-        ctx.channel, sender_address, full_reply.len(), validated_attachments.len()
-    ));
 
     // Build OutboundAttachment list from validated filenames
     let outbound_attachments: Vec<OutboundAttachment> = validated_attachments
@@ -268,27 +258,24 @@ async fn handle_reply(
         })
         .collect();
 
+    logger.log("INFO", &format!(
+        "Sending reply: channel={}, recipient={}, attachments={}",
+        ctx.channel, sender_address, outbound_attachments.len()
+    ));
+
+    // 9. Send reply — outbound adapter handles: format + send + store
     let send_result = outbound
         .send_reply(
             &original,
-            &full_reply,
-            if outbound_attachments.is_empty() {
-                None
-            } else {
-                Some(&outbound_attachments)
-            },
+            message,
+            thread_path,
+            &ctx.incoming_message_dir,
+            if outbound_attachments.is_empty() { None } else { Some(&outbound_attachments) },
         )
         .await?;
     outbound.disconnect().await?;
 
     logger.log("INFO", &format!("Reply sent: message_id={}", send_result.message_id));
-
-    // 9. Store reply
-    let storage = MessageStorage::new(
-        thread_path.parent().unwrap_or(thread_path),
-    );
-    storage.store_reply(thread_path, &full_reply, &ctx.incoming_message_dir).await.ok();
-    logger.log("INFO", "Reply stored");
 
     // 10. Write signal file
     let jyc_dir = thread_path.join(".jyc");

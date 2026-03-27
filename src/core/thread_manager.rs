@@ -8,7 +8,6 @@ use tracing::Instrument;
 
 use crate::channels::email::outbound::EmailOutboundAdapter;
 use crate::channels::types::{AttachmentConfig, InboundMessage, PatternMatch};
-use crate::config::types::AgentConfig;
 use crate::core::command::handler::CommandContext;
 use crate::core::command::model_handler::ModelCommandHandler;
 use crate::core::command::mode_handler::{BuildCommandHandler, PlanCommandHandler};
@@ -277,20 +276,9 @@ async fn process_message(
             "Sending command results"
         );
 
-        let full_reply = email_parser::build_full_reply_text(
-            &summary,
-            &store_result.thread_path,
-            &message.sender,
-            &message.timestamp.to_rfc3339(),
-            &message.topic,
-            raw_body,
-            &store_result.message_dir,
-        )
-        .await;
-
-        outbound.send_reply(message, &full_reply, None).await?;
-        storage
-            .store_reply(&store_result.thread_path, &full_reply, &store_result.message_dir)
+        // Outbound adapter handles formatting + sending + storing
+        outbound
+            .send_reply(message, &summary, &store_result.thread_path, &store_result.message_dir, None)
             .await?;
     }
 
@@ -305,9 +293,7 @@ async fn process_message(
     );
 
     if effective_body_empty {
-        tracing::info!(
-            "No message body, stopping (no AI)"
-        );
+        tracing::info!("No message body, stopping (no AI)");
         return Ok(());
     }
 
@@ -323,11 +309,19 @@ async fn process_message(
         .process(&message, thread_name, &store_result.thread_path, &store_result.message_dir)
         .await?;
 
-    tracing::info!(
-        reply_sent = result.reply_sent,
-        summary = %result.summary,
-        "Agent complete"
-    );
+    // ── 6. HANDLE AGENT RESULT ────────────────────────────────────────
+    if result.reply_sent_by_tool {
+        tracing::info!("Reply sent by MCP tool");
+    } else if let Some(ref text) = result.reply_text {
+        tracing::info!(text_len = text.len(), "Fallback: sending AI text via outbound");
+        // Outbound adapter handles formatting + sending + storing
+        outbound
+            .send_reply(&message, text, &store_result.thread_path, &store_result.message_dir, None)
+            .await?;
+        tracing::info!("Fallback reply sent");
+    } else {
+        tracing::warn!("No reply text from AI");
+    }
 
     Ok(())
 }

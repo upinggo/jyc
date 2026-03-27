@@ -121,7 +121,7 @@ pub async fn run(args: &MonitorArgs, workdir: &Path) -> Result<()> {
         // Create components
         let storage = Arc::new(MessageStorage::new(&workspace_dir));
 
-        let outbound = Arc::new(EmailOutboundAdapter::new(outbound_config));
+        let outbound = Arc::new(EmailOutboundAdapter::new(outbound_config, storage.clone()));
         outbound.connect().await.with_context(|| {
             format!("channel '{channel_name}': SMTP connection failed")
         })?;
@@ -172,8 +172,6 @@ pub async fn run(args: &MonitorArgs, workdir: &Path) -> Result<()> {
                 Arc::new(OpenCodeService::new(
                     opencode_server.clone(),
                     agent_config.clone(),
-                    storage.clone(),
-                    outbound.clone(),
                     workdir.to_path_buf(),
                 ))
             }
@@ -182,7 +180,7 @@ pub async fn run(args: &MonitorArgs, workdir: &Path) -> Result<()> {
                     .text
                     .as_deref()
                     .unwrap_or("Thank you for your message.");
-                Arc::new(StaticAgentService::new(text, storage.clone(), outbound.clone()))
+                Arc::new(StaticAgentService::new(text))
             }
             other => {
                 anyhow::bail!("unsupported agent mode: '{other}'");

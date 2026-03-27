@@ -6,22 +6,17 @@ use std::sync::Arc;
 use super::client::{OpenCodeClient, SseResult};
 use super::types::*;
 use super::{session, prompt_builder, OpenCodeServer};
-use crate::channels::email::outbound::EmailOutboundAdapter;
 use crate::channels::types::InboundMessage;
 use crate::config::types::AgentConfig;
-use crate::core::email_parser;
-use crate::core::message_storage::MessageStorage;
 use crate::services::agent::{AgentResult, AgentService};
 
 /// Encapsulates all OpenCode AI interaction logic.
 ///
-/// Owns: server lifecycle, sessions, prompts, SSE streaming, error recovery,
-/// reply building (with quoted history), sending (via tool or fallback), and storage.
+/// Channel-agnostic — does NOT know about email, SMTP, or reply formatting.
+/// Returns raw AI text. The outbound adapter handles formatting + sending + storing.
 pub struct OpenCodeService {
     server: Arc<OpenCodeServer>,
     agent_config: Arc<AgentConfig>,
-    storage: Arc<MessageStorage>,
-    outbound: Arc<EmailOutboundAdapter>,
     workdir: PathBuf,
 }
 
@@ -29,21 +24,16 @@ impl OpenCodeService {
     pub fn new(
         server: Arc<OpenCodeServer>,
         agent_config: Arc<AgentConfig>,
-        storage: Arc<MessageStorage>,
-        outbound: Arc<EmailOutboundAdapter>,
         workdir: PathBuf,
     ) -> Self {
         Self {
             server,
             agent_config,
-            storage,
-            outbound,
             workdir,
         }
     }
 
     /// Internal: generate AI reply via OpenCode SSE streaming.
-    /// Returns the raw result (reply_sent_by_tool, reply_text).
     async fn generate_reply(
         &self,
         message: &InboundMessage,
@@ -66,11 +56,10 @@ impl OpenCodeService {
 
         if config_changed {
             tracing::info!("opencode.json changed");
-            // Config changed — delete old session so a new one picks up the new config
             session::delete_session(thread_path).await?;
         }
 
-        // 3. Get or create session (reuse existing if still valid on server)
+        // 3. Get or create session
         let session_id = session::get_or_create_session(&client, thread_path).await?;
 
         // 4. Clean up stale signal file
@@ -119,20 +108,17 @@ impl OpenCodeService {
         let result = match sse_result {
             Ok(result) => {
                 self.handle_sse_result(
-                    result, ch, thread_name, thread_path,
+                    result, thread_name, thread_path,
                     &client, &session_id, &request,
                 ).await?
             }
             Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    "SSE streaming failed, trying blocking fallback"
-                );
+                tracing::error!(error = %e, "SSE streaming failed, trying blocking fallback");
                 let blocking_result = client
                     .prompt_blocking(&session_id, thread_path, &request)
                     .await?;
                 self.handle_blocking_result(
-                    blocking_result, ch, thread_name, thread_path,
+                    blocking_result, thread_name, thread_path,
                     &client, &session_id, &request,
                 ).await?
             }
@@ -147,7 +133,6 @@ impl OpenCodeService {
     async fn handle_sse_result(
         &self,
         result: SseResult,
-        channel: &str,
         thread_name: &str,
         thread_path: &Path,
         client: &OpenCodeClient,
@@ -162,7 +147,7 @@ impl OpenCodeService {
                 let new_id = session::create_new_session(client, thread_path).await?;
                 let retry = client.prompt_blocking(&new_id, thread_path, request).await?;
                 return self.handle_blocking_result(
-                    retry, channel, thread_name, thread_path, client, &new_id, request,
+                    retry, thread_name, thread_path, client, &new_id, request,
                 ).await;
             }
         }
@@ -236,8 +221,7 @@ impl OpenCodeService {
     async fn handle_blocking_result(
         &self,
         result: PromptResponse,
-        _channel: &str,
-        _thread_name: &str,
+        thread_name: &str,
         thread_path: &Path,
         _client: &OpenCodeClient,
         _session_id: &str,
@@ -278,60 +262,14 @@ impl AgentService for OpenCodeService {
     ) -> Result<AgentResult> {
         let result = self.generate_reply(message, thread_name, thread_path, message_dir).await?;
 
-        if result.reply_sent_by_tool {
-            return Ok(AgentResult {
-                reply_sent: true,
-                summary: format!("Reply sent by MCP tool (model: {:?})", result.model_id),
-            });
-        }
-
-        // Fallback: build full reply with quoted history and send
-        if let Some(ref text) = result.reply_text {
-            tracing::info!(
-                text_len = text.len(),
-                "Fallback: sending reply with quoted history"
-            );
-
-            let body_text = message
-                .content
-                .text
-                .as_deref()
-                .or(message.content.markdown.as_deref())
-                .unwrap_or("");
-
-            let full_reply = email_parser::build_full_reply_text(
-                text,
-                thread_path,
-                &message.sender,
-                &message.timestamp.to_rfc3339(),
-                &message.topic,
-                body_text,
-                message_dir,
-            )
-            .await;
-
-            self.outbound.send_reply(message, &full_reply, None).await?;
-            self.storage
-                .store_reply(thread_path, &full_reply, message_dir)
-                .await?;
-
-            tracing::info!("Fallback reply sent");
-
-            Ok(AgentResult {
-                reply_sent: true,
-                summary: "Fallback reply sent".to_string(),
-            })
-        } else {
-            tracing::warn!("No reply text from AI");
-            Ok(AgentResult {
-                reply_sent: false,
-                summary: "No reply text from AI".to_string(),
-            })
-        }
+        Ok(AgentResult {
+            reply_sent_by_tool: result.reply_sent_by_tool,
+            reply_text: result.reply_text,
+        })
     }
 }
 
-/// Internal result from generate_reply (before AgentService wrapping).
+/// Internal result from generate_reply.
 #[derive(Debug)]
 struct GenerateReplyResult {
     reply_sent_by_tool: bool,
@@ -341,7 +279,6 @@ struct GenerateReplyResult {
 }
 
 /// Extract text content from accumulated response parts.
-/// Strips prompt echoes that the AI may include when the reply tool fails.
 fn extract_text_from_parts(parts: &[ResponsePart]) -> Option<String> {
     let text: String = parts
         .iter()
@@ -351,30 +288,17 @@ fn extract_text_from_parts(parts: &[ResponsePart]) -> Option<String> {
         .join("\n");
 
     let cleaned = strip_prompt_echo(&text);
-
-    if cleaned.trim().is_empty() {
-        None
-    } else {
-        Some(cleaned)
-    }
+    if cleaned.trim().is_empty() { None } else { Some(cleaned) }
 }
 
-/// Strip prompt artifacts that the AI may echo back when the reply tool fails.
+/// Strip prompt artifacts that the AI may echo back.
 fn strip_prompt_echo(text: &str) -> String {
-    let markers = [
-        "## Incoming Message",
-        "REPLY_TOKEN=",
-        "## Conversation history",
-    ];
-
+    let markers = ["## Incoming Message", "REPLY_TOKEN=", "## Conversation history"];
     let mut end = text.len();
     for marker in &markers {
         if let Some(pos) = text.find(marker) {
-            if pos < end {
-                end = pos;
-            }
+            if pos < end { end = pos; }
         }
     }
-
     text[..end].trim().to_string()
 }

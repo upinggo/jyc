@@ -311,7 +311,7 @@ Email arrives
 - **InboundAdapter** is the only place where data is cleaned (subject + body)
 - **MessageStorage** stores data as-is (with full frontmatter metadata) — the authoritative source of message data
 - **PromptBuilder** strips quoted history from body for the AI prompt; does NOT include conversation history (OpenCode session memory handles that)
-- **`build_full_reply_text()`** is the single shared function for assembling the full reply (AI text + quoted history) — used by both ThreadManager fallback AND MCP reply tool
+- **`build_full_reply_text()`** is the single shared function for assembling the full reply (AI text + quoted history) — called by `EmailOutboundAdapter` and MCP reply tool, NOT by agents or ThreadManager
 - **SmtpClient** is a dumb transport: markdown→HTML + headers + attachments + send
 - **REPLY_TOKEN** is a minimal routing token (5 fields) — all message metadata comes from `received.md` frontmatter
 - **reply.md** = exactly what the recipient receives (minus HTML formatting)
@@ -871,11 +871,11 @@ root_cancel (top-level)
 
 ## Worker (OpenCode Service)
 
-### Responsibility Separation: ThreadManager vs AgentService
+### Responsibility Separation: ThreadManager vs AgentService vs OutboundAdapter
 
-The processing pipeline is split into two layers with distinct responsibilities, connected via the `AgentService` trait.
+The processing pipeline is split into three layers with distinct responsibilities:
 
-**`AgentService` trait** (`src/services/agent.rs`):
+**`AgentService` trait** (`src/services/agent.rs`) — Channel-agnostic AI brain:
 ```rust
 #[async_trait]
 pub trait AgentService: Send + Sync {
@@ -884,43 +884,58 @@ pub trait AgentService: Send + Sync {
         thread_path: &Path, message_dir: &str,
     ) -> Result<AgentResult>;
 }
+
+pub struct AgentResult {
+    pub reply_sent_by_tool: bool,   // MCP tool already handled full lifecycle
+    pub reply_text: Option<String>, // Raw AI text for outbound adapter
+}
 ```
 Each agent mode implements this trait. Adding a new agent requires only implementing `AgentService` + a match arm in `cli/monitor.rs`.
 
-**ThreadManager** (`src/core/thread_manager.rs`):
+**ThreadManager** (`src/core/thread_manager.rs`) — Orchestrator:
 - Queue management: per-thread mpsc channels, semaphore-bounded concurrency
 - Message storage: store `received.md`, save attachments
-- Command processing: parse/execute/strip email commands
-- Agent dispatch: calls `agent.process()` via `Arc<dyn AgentService>` — no `match` on mode
-- Does NOT know about: sessions, prompts, SSE, signal files, ContextOverflow, reply building
+- Command processing: parse/execute/strip email commands, send command results
+- Agent dispatch: calls `agent.process()` via `Arc<dyn AgentService>`
+- Fallback: passes raw AI text to outbound adapter if MCP tool wasn't used
+- Does NOT know about: sessions, prompts, SSE, reply formatting, email quoting
+
+**OutboundAdapter** (`src/channels/email/outbound.rs`) — Channel-specific reply lifecycle:
+- Builds channel-formatted reply (email: `build_full_reply_text()` with quoted history)
+- Sends via channel transport (SMTP with threading headers + attachments)
+- Stores `reply.md`
+- Different channels (FeiShu, Slack) would implement different formatting + transport
 
 **OpenCodeService** (`src/services/opencode/service.rs`) implements `AgentService`:
 - Server lifecycle: ensure OpenCode server is running, health check, auto-restart
 - Thread setup: write per-thread `opencode.json` with model, MCP tools, permissions
-- Session management: create fresh sessions per prompt, staleness detection
+- Session management: reuse/create sessions, staleness detection
 - Prompt building: system prompt + user prompt + REPLY_TOKEN
 - SSE streaming: activity timeout, tool detection, progress logging
 - Error recovery: ContextOverflow → new session, stale session → retry
-- Fallback: if MCP tool not used → build full reply with quoted history → send + store
-- Owns the entire reply lifecycle (sending + storage) — ThreadManager just checks `AgentResult`
+- Returns raw AI text — does NOT format, send, or store replies
 
 **StaticAgentService** (`src/services/static_agent.rs`) implements `AgentService`:
-- Builds full reply with quoted history from configured static text
-- Sends via OutboundAdapter + stores reply.md
+- Returns configured static text — does NOT format, send, or store
 
 ```rust
-// ThreadManager dispatches to the agent — no mode-specific code:
+// ThreadManager dispatches to agent, then outbound:
 let result = agent.process(&message, thread_name, thread_path, message_dir).await?;
 
-// ThreadManager just logs the result:
-tracing::info!(reply_sent = result.reply_sent, summary = %result.summary, "Agent complete");
+if !result.reply_sent_by_tool {
+    if let Some(ref text) = result.reply_text {
+        // Outbound adapter owns: format + send + store
+        outbound.send_reply(&message, text, thread_path, message_dir, None).await?;
+    }
+}
 ```
 
 This separation:
-- Keeps agent-specific logic isolated from queue/concurrency infrastructure
-- Makes it easy to add alternative agent backends (e.g., direct LLM API without OpenCode)
-- Makes ThreadManager testable without a running OpenCode server
-- Each agent owns the full reply lifecycle (building, sending, storing)
+- **Agent** is channel-agnostic — returns raw text, no email/FeiShu knowledge
+- **OutboundAdapter** owns the full reply lifecycle — format + send + store
+- **ThreadManager** is a thin orchestrator — dispatch to agent, pass result to outbound
+- Adding a new channel requires only a new OutboundAdapter implementation
+- Adding a new AI backend requires only a new AgentService implementation
 
 ### Session-Based Thread Management
 
@@ -1070,18 +1085,14 @@ JYC uses the following subset of the OpenCode server API:
 │          │            │                                               │
 │          ▼            ▼                                               │
 │  ┌──────────┐  ┌──────────────────────────────────────────┐          │
-│  │ STOP     │  │ 5. DISPATCH TO AGENT MODE                │          │
-│  │ (no AI)  │  │                                          │          │
-│  │ return   │  │  "static" →                              │          │
-│  └──────────┘  │    build_full_reply_text(text) → send    │          │
-│                │                                          │          │
-│                │  "opencode" →                             │          │
-│                │    OpenCodeService::generate_reply() ─────┼──┐      │
-│                │         │                                │  │      │
-│                │    If !reply_sent_by_tool:               │  │      │
-│                │      build_full_reply_text(reply_text)   │  │      │
-│                │      → send fallback reply               │  │      │
-│                │      → store reply.md                    │  │      │
+│  │ STOP     │  │ 5. DISPATCH TO AGENT                     │          │
+│  │ (no AI)  │  │    agent.process() → AgentResult         │          │
+│  │ return   │  │                                          │          │
+│  └──────────┘  │ 6. HANDLE RESULT                         │          │
+│                │    If reply_sent_by_tool → done           │          │
+│                │    If reply_text → pass to outbound:      │          │
+│                │      outbound.send_reply(raw_text)        │          │
+│                │      (outbound formats + sends + stores)  │          │
 │                └──────────────────────────────────────────┘  │      │
 │                                                              │      │
 │  Worker picks next message from thread queue                  │      │
@@ -1191,8 +1202,8 @@ Thread files still provide recent conversation context
 | Scenario | What Happens |
 |----------|-------------|
 | OpenCode uses `reply_message` tool successfully | Detected via SSE; `reply_sent_by_tool: true`, skips fallback |
-| `reply_message` tool fails (e.g. MCP not implemented, invalid JSON) | AI generates text response instead; ThreadManager builds full reply with quoted history and sends via OutboundAdapter |
-| AI returns text without using tool | `session.idle` fires; ThreadManager calls `build_full_reply_text()` and sends via OutboundAdapter |
+| `reply_message` tool fails (e.g. MCP not implemented, invalid JSON) | AI generates text response instead; ThreadManager passes raw text to OutboundAdapter which formats, sends, and stores |
+| AI returns text without using tool | `session.idle` fires; ThreadManager passes raw text to OutboundAdapter |
 | AI takes very long but keeps working | SSE events keep arriving → no timeout; progress logged every 10s |
 | AI goes silent for 30 minutes | Activity timeout (60 min if tool running) → checks signal file → error |
 | SSE subscription fails | Falls back to blocking prompt with 5-min timeout |
@@ -1202,13 +1213,12 @@ Thread files still provide recent conversation context
 
 ### Reply Text Building Pipeline
 
-`build_full_reply_text()` (`src/core/email_parser.rs`) is the **single shared function** for assembling a complete reply email. It is used by:
+`build_full_reply_text()` (`src/core/email_parser.rs`) is the **single shared function** for assembling a complete reply email. It is called by:
 
-1. **ThreadManager fallback** — when AI returns text instead of using the MCP reply tool
-2. **ThreadManager static mode** — for static reply text
-3. **MCP reply tool** (Phase 5) — when the AI calls `reply_message`
+1. **EmailOutboundAdapter::send_reply()** — the outbound adapter calls it internally when formatting replies (both fallback and command results)
+2. **MCP reply tool** — when the AI calls `reply_message` (the tool creates its own `EmailOutboundAdapter` which calls it)
 
-This ensures all reply emails have the same format regardless of the send path.
+This ensures all reply emails have the same format regardless of the send path. The agent (OpenCodeService/StaticAgentService) never calls this function — it's a channel-specific concern owned by the outbound adapter.
 
 **Reply format:**
 ```

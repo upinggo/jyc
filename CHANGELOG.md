@@ -2,6 +2,39 @@
 
 All notable changes to JYC will be documented in this file.
 
+## [0.0.5] - 2026-03-27
+
+### Changed
+
+**Minimal reply context token (corruption-proof)**
+- Token slimmed from 12 fields to 5: `channel`, `threadName`, `incomingMessageDir`, `uid`, `_nonce`
+- All message metadata (sender, recipient, topic, threading headers) now read from stored `received.md` frontmatter — NOT from the AI-passed token
+- Prevents AI model corruption (e.g., `petalmail.com` → `petailmail.com` causing bounced emails)
+- Token is now ~120 bytes base64 instead of ~400 bytes — shorter = less corruption risk
+- Switched to standard base64 (with padding) matching jiny-m's format
+
+**Token serialization moved to `mcp/context.rs`**
+- `serialize_context()` and `deserialize_context()` now live together in `src/mcp/context.rs`
+- Removed from `prompt_builder.rs` — the prompt builder imports from `mcp::context`
+- All token logic (struct, serialize, deserialize, validate) in one place
+
+**Enriched received.md frontmatter**
+- Added `sender`, `sender_address`, `external_id`, `reply_to_id`, `thread_refs`, `matched_pattern` to YAML frontmatter
+- Reply tool reads all metadata from disk (authoritative source) instead of trusting token
+- `parse_stored_message()` extracts all new frontmatter fields
+
+**Docker: 3-stage build + image size optimization**
+- Restructured to base (tools, cached) → builder (Rust compile) → final (base + binary)
+- Removed Rust toolchain from runtime image (~1.23GB saved, image ~740MB)
+- AI installs Rust on-demand for self-bootstrapping (~30s)
+- `CARGO_TARGET_DIR=/tmp/jyc-target` avoids cross-platform conflict with host macOS builds
+- Cargo registry + git cached in named Docker volumes
+- OpenCode data volume for session persistence across container restarts
+- Builder uses `rust:bookworm` matching runtime's glibc version
+
+**Logging**
+- `system.md loaded` / `No system.md found` log when building system prompt
+
 ## [0.0.4] - 2026-03-27
 
 ### Added

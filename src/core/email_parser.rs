@@ -152,15 +152,20 @@ pub fn truncate_text(text: &str, max_chars: usize) -> String {
     format!("{}...", &text[..end])
 }
 
-/// Parse a stored received.md file, extracting sender, timestamp, topic, and body.
+/// Parse a stored received.md file, extracting all frontmatter and body.
 #[derive(Debug)]
 pub struct ParsedStoredMessage {
     pub sender: Option<String>,
+    pub sender_address: Option<String>,
     pub timestamp: Option<String>,
     pub topic: Option<String>,
     pub body: String,
     pub channel: Option<String>,
     pub uid: Option<String>,
+    pub external_id: Option<String>,
+    pub reply_to_id: Option<String>,
+    pub thread_refs: Option<Vec<String>>,
+    pub matched_pattern: Option<String>,
 }
 
 /// Parse a stored received.md file.
@@ -182,7 +187,12 @@ pub fn parse_stored_message(content: &str) -> ParsedStoredMessage {
     let mut uid = None;
     let mut topic = None;
     let mut sender = None;
+    let mut sender_address = None;
     let mut timestamp = None;
+    let mut external_id = None;
+    let mut reply_to_id = None;
+    let mut thread_refs = None;
+    let mut matched_pattern = None;
     let mut body = String::new();
 
     let mut in_frontmatter = false;
@@ -210,7 +220,28 @@ pub fn parse_stored_message(content: &str) -> ParsedStoredMessage {
                     match key {
                         "channel" => channel = Some(value.to_string()),
                         "uid" => uid = Some(value.to_string()),
+                        "sender" => {
+                            // "sender" in frontmatter is the display name
+                            sender = Some(value.to_string());
+                        }
+                        "sender_address" => sender_address = Some(value.to_string()),
                         "topic" => topic = Some(value.to_string()),
+                        "external_id" => external_id = Some(value.to_string()),
+                        "reply_to_id" => reply_to_id = Some(value.to_string()),
+                        "thread_refs" => {
+                            // Parse YAML-style array: ["ref1", "ref2"]
+                            let refs_str = value.trim_matches(|c| c == '[' || c == ']');
+                            let refs: Vec<String> = refs_str
+                                .split(',')
+                                .map(|s| s.trim().trim_matches('"').to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                            if !refs.is_empty() {
+                                thread_refs = Some(refs);
+                            }
+                        }
+                        "matched_pattern" => matched_pattern = Some(value.to_string()),
+                        "timestamp" => timestamp = Some(value.to_string()),
                         _ => {}
                     }
                 }
@@ -249,11 +280,16 @@ pub fn parse_stored_message(content: &str) -> ParsedStoredMessage {
 
     ParsedStoredMessage {
         sender,
+        sender_address,
         timestamp,
         topic,
         body,
         channel,
         uid,
+        external_id,
+        reply_to_id,
+        thread_refs,
+        matched_pattern,
     }
 }
 

@@ -7,7 +7,7 @@ use rmcp::{
 };
 use std::path::{Path, PathBuf};
 
-use super::context::{context_to_inbound_message, deserialize_context};
+use super::context::deserialize_context;
 use crate::channels::email::outbound::EmailOutboundAdapter;
 use crate::channels::types::OutboundAttachment;
 use crate::config;
@@ -136,8 +136,8 @@ async fn handle_reply(
     // 1. Decode and validate context
     let ctx = deserialize_context(token)?;
     logger.log("INFO", &format!(
-        "Context validated: channel={}, recipient={}, topic={}",
-        ctx.channel, ctx.recipient, ctx.topic
+        "Context: channel={}, thread={}, messageDir={}",
+        ctx.channel, ctx.thread_name, ctx.incoming_message_dir
     ));
 
     // 2. Validate message
@@ -162,36 +162,38 @@ async fn handle_reply(
         vec![]
     };
 
-    // 6. Load full message body from stored received.md
-    let body_text = if let Some(ref dir) = ctx.incoming_message_dir {
-        let received_path = thread_path
-            .join("messages")
-            .join(dir)
-            .join("received.md");
-        if let Ok(content) = tokio::fs::read_to_string(&received_path).await {
-            let parsed = email_parser::parse_stored_message(&content);
-            logger.log("INFO", &format!(
-                "Loaded body from {}: {} chars",
-                received_path.display(), parsed.body.len()
-            ));
-            parsed.body
-        } else {
-            logger.log("WARN", "Could not read received.md — reply without quoted history");
-            String::new()
-        }
-    } else {
-        String::new()
-    };
+    // 6. Load message metadata from stored received.md (authoritative source — NOT from token)
+    let received_path = thread_path
+        .join("messages")
+        .join(&ctx.incoming_message_dir)
+        .join("received.md");
+    let received_content = tokio::fs::read_to_string(&received_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to read {}: {}", received_path.display(), e))?;
+    let parsed = email_parser::parse_stored_message(&received_content);
+
+    let sender = parsed.sender.unwrap_or_else(|| "Unknown".to_string());
+    let sender_address = parsed.sender_address
+        .ok_or_else(|| anyhow::anyhow!("sender_address not found in received.md frontmatter"))?;
+    let topic = parsed.topic.unwrap_or_default();
+    let timestamp = parsed.timestamp.unwrap_or_default();
+    let external_id = parsed.external_id;
+    let thread_refs = parsed.thread_refs;
+
+    logger.log("INFO", &format!(
+        "Loaded from received.md: sender={}, recipient={}, topic={}, body={} chars",
+        sender, sender_address, topic, parsed.body.len()
+    ));
 
     // 7. Build full reply text — uses the shared build_full_reply_text()
     let full_reply = email_parser::build_full_reply_text(
         message,
         thread_path,
-        &ctx.sender,
-        &ctx.timestamp,
-        &ctx.topic,
-        &body_text,
-        ctx.incoming_message_dir.as_deref().unwrap_or(""),
+        &sender,
+        &timestamp,
+        &topic,
+        &parsed.body,
+        &ctx.incoming_message_dir,
     )
     .await;
 
@@ -209,11 +211,28 @@ async fn handle_reply(
     let outbound = EmailOutboundAdapter::new(smtp_config);
     outbound.connect().await?;
 
-    let original = context_to_inbound_message(&ctx);
+    // Reconstruct InboundMessage from stored metadata (not from token)
+    let original = crate::channels::types::InboundMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        channel: ctx.channel.clone(),
+        channel_uid: ctx.uid.clone(),
+        sender: sender.clone(),
+        sender_address: sender_address.clone(),
+        recipients: vec![],
+        topic: topic.clone(),
+        content: crate::channels::types::MessageContent::default(),
+        timestamp: chrono::Utc::now(),
+        thread_refs: thread_refs,
+        reply_to_id: None,
+        external_id: external_id,
+        attachments: vec![],
+        metadata: std::collections::HashMap::new(),
+        matched_pattern: None,
+    };
 
     logger.log("INFO", &format!(
         "Sending reply: channel={}, recipient={}, len={}, attachments={}",
-        ctx.channel, ctx.recipient, full_reply.len(), validated_attachments.len()
+        ctx.channel, sender_address, full_reply.len(), validated_attachments.len()
     ));
 
     // Build OutboundAttachment list from validated filenames
@@ -267,10 +286,8 @@ async fn handle_reply(
     let storage = MessageStorage::new(
         thread_path.parent().unwrap_or(thread_path),
     );
-    if let Some(ref dir) = ctx.incoming_message_dir {
-        storage.store_reply(thread_path, &full_reply, dir).await.ok();
-        logger.log("INFO", "Reply stored");
-    }
+    storage.store_reply(thread_path, &full_reply, &ctx.incoming_message_dir).await.ok();
+    logger.log("INFO", "Reply stored");
 
     // 10. Write signal file
     let jyc_dir = thread_path.join(".jyc");
@@ -278,7 +295,7 @@ async fn handle_reply(
     let signal = serde_json::json!({
         "sent_at": chrono::Utc::now().to_rfc3339(),
         "channel": ctx.channel,
-        "recipient": ctx.recipient,
+        "recipient": sender_address,
         "message_id": send_result.message_id,
         "attachment_count": validated_attachments.len(),
     });
@@ -293,7 +310,7 @@ async fn handle_reply(
     // 11. Return success
     let mut result = format!(
         "Reply sent successfully via {} to {}",
-        ctx.channel, ctx.recipient
+        ctx.channel, sender_address
     );
     if !validated_attachments.is_empty() {
         result.push_str(&format!(

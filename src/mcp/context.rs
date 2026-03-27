@@ -1,42 +1,71 @@
 use anyhow::{bail, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
-use crate::channels::types::InboundMessage;
-use crate::channels::types::MessageContent;
-
-/// Reply context — metadata passed opaquely through the AI to the reply tool.
+/// Minimal reply context token — channel-agnostic routing + file location.
 ///
-/// Serialized as JSON → base64url. The AI passes it unchanged.
+/// The token is intentionally minimal to reduce corruption risk from AI models.
+/// All message metadata (sender, recipient, topic, threading headers) is read
+/// from the stored received.md file by the reply tool — NOT from the token.
+///
+/// Token fields:
+/// - `channel`: config channel name (routing key for outbound adapter)
+/// - `threadName`: thread directory name (for logging)
+/// - `incomingMessageDir`: message subdirectory name (to find received.md)
+/// - `uid`: channel-specific message ID
+/// - `_nonce`: integrity nonce
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplyContext {
+    /// Config channel name (e.g., "jiny283") — routing key
     pub channel: String,
+    /// Thread directory name (e.g., "weather") — for logging
     #[serde(rename = "threadName")]
     pub thread_name: String,
-    pub sender: String,
-    pub recipient: String,
-    pub topic: String,
-    pub timestamp: String,
+    /// Message subdirectory under messages/ (e.g., "2026-03-27_10-00-00")
     #[serde(rename = "incomingMessageDir")]
-    pub incoming_message_dir: Option<String>,
-    #[serde(rename = "externalId")]
-    pub external_id: Option<String>,
-    #[serde(rename = "threadRefs")]
-    pub thread_refs: Option<Vec<String>>,
+    pub incoming_message_dir: String,
+    /// Channel-specific message ID (e.g., IMAP UID)
     pub uid: String,
+    /// Integrity nonce
     #[serde(rename = "_nonce")]
     pub nonce: Option<String>,
-    #[serde(rename = "channelMetadata")]
-    pub channel_metadata: Option<HashMap<String, serde_json::Value>>,
+}
+
+/// Serialize a reply context token (struct → JSON → base64).
+///
+/// Uses standard base64 (with padding) to match jiny-m's format.
+pub fn serialize_context(
+    channel: &str,
+    thread_name: &str,
+    incoming_message_dir: &str,
+    uid: &str,
+) -> String {
+    let nonce = format!(
+        "{}-{}",
+        chrono::Utc::now().timestamp_millis(),
+        &uuid::Uuid::new_v4().to_string()[..8]
+    );
+
+    let context = ReplyContext {
+        channel: channel.to_string(),
+        thread_name: thread_name.to_string(),
+        incoming_message_dir: incoming_message_dir.to_string(),
+        uid: uid.to_string(),
+        nonce: Some(nonce),
+    };
+
+    let json = serde_json::to_string(&context).unwrap_or_default();
+    base64::engine::general_purpose::STANDARD.encode(json)
 }
 
 /// Deserialize and validate a reply context token.
 ///
-/// base64url → JSON → ReplyContext with integrity checks.
+/// base64 → JSON → ReplyContext with integrity checks.
 pub fn deserialize_context(encoded: &str) -> Result<ReplyContext> {
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    // Try standard base64 first, then URL-safe (backward compat)
+    let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded))
         .map_err(|e| anyhow::anyhow!("invalid base64 token: {e}"))?;
 
     let json =
@@ -54,101 +83,58 @@ pub fn deserialize_context(encoded: &str) -> Result<ReplyContext> {
     if ctx.channel.is_empty() {
         bail!("missing required field: channel");
     }
-    if ctx.recipient.is_empty() {
-        bail!("missing required field: recipient");
+    if ctx.incoming_message_dir.is_empty() {
+        bail!("missing required field: incomingMessageDir");
     }
 
     Ok(ctx)
-}
-
-/// Reconstruct a minimal InboundMessage from a ReplyContext.
-///
-/// Used by the reply tool to call OutboundAdapter.send_reply().
-pub fn context_to_inbound_message(ctx: &ReplyContext) -> InboundMessage {
-    InboundMessage {
-        id: uuid::Uuid::new_v4().to_string(),
-        channel: ctx.channel.clone(),
-        channel_uid: ctx.uid.clone(),
-        sender: ctx.sender.clone(),
-        sender_address: ctx.recipient.clone(),
-        recipients: vec![],
-        topic: ctx.topic.clone(),
-        content: MessageContent::default(),
-        timestamp: chrono::Utc::now(),
-        thread_refs: ctx.thread_refs.clone(),
-        reply_to_id: None,
-        external_id: ctx.external_id.clone(),
-        attachments: vec![],
-        metadata: ctx.channel_metadata.clone().unwrap_or_default(),
-        matched_pattern: None,
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_token(json: &str) -> String {
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
-    }
-
     #[test]
-    fn test_deserialize_valid() {
-        let json = r#"{"channel":"email","threadName":"test","sender":"John","recipient":"john@example.com","topic":"Test","timestamp":"2026-03-27","uid":"42"}"#;
-        let token = make_token(json);
+    fn test_serialize_deserialize_round_trip() {
+        let token = serialize_context("jiny283", "weather", "2026-03-27_10-00-00", "42");
         let ctx = deserialize_context(&token).unwrap();
-        assert_eq!(ctx.channel, "email");
-        assert_eq!(ctx.recipient, "john@example.com");
+        assert_eq!(ctx.channel, "jiny283");
+        assert_eq!(ctx.thread_name, "weather");
+        assert_eq!(ctx.incoming_message_dir, "2026-03-27_10-00-00");
         assert_eq!(ctx.uid, "42");
+        assert!(ctx.nonce.is_some());
     }
 
     #[test]
     fn test_deserialize_missing_channel() {
-        let json = r#"{"channel":"","threadName":"t","sender":"s","recipient":"r","topic":"t","timestamp":"t","uid":"1"}"#;
-        let token = make_token(json);
+        let json = r#"{"channel":"","threadName":"t","incomingMessageDir":"d","uid":"1"}"#;
+        let token = base64::engine::general_purpose::STANDARD.encode(json);
         assert!(deserialize_context(&token).is_err());
     }
 
     #[test]
-    fn test_deserialize_missing_recipient() {
-        let json = r#"{"channel":"email","threadName":"t","sender":"s","recipient":"","topic":"t","timestamp":"t","uid":"1"}"#;
-        let token = make_token(json);
-        assert!(deserialize_context(&token).is_err());
-    }
-
-    #[test]
-    fn test_deserialize_tampered_backticks() {
-        let json = r#"`{"channel":"email"}`"#;
-        let token = make_token(json);
+    fn test_deserialize_missing_message_dir() {
+        let json = r#"{"channel":"ch","threadName":"t","incomingMessageDir":"","uid":"1"}"#;
+        let token = base64::engine::general_purpose::STANDARD.encode(json);
         assert!(deserialize_context(&token).is_err());
     }
 
     #[test]
     fn test_deserialize_invalid_base64() {
-        assert!(deserialize_context("not-valid-base64!!!").is_err());
+        assert!(deserialize_context("not-valid!!!").is_err());
     }
 
     #[test]
-    fn test_context_to_inbound_message() {
-        let ctx = ReplyContext {
-            channel: "email".to_string(),
-            thread_name: "test".to_string(),
-            sender: "John".to_string(),
-            recipient: "john@example.com".to_string(),
-            topic: "Test Subject".to_string(),
-            timestamp: "2026-03-27T10:00:00Z".to_string(),
-            incoming_message_dir: Some("2026-03-27_10-00-00".to_string()),
-            external_id: Some("<msg@example.com>".to_string()),
-            thread_refs: Some(vec!["<ref1@example.com>".to_string()]),
-            uid: "42".to_string(),
-            nonce: None,
-            channel_metadata: None,
-        };
+    fn test_deserialize_tampered_backticks() {
+        let json = r#"`{"channel":"ch"}`"#;
+        let token = base64::engine::general_purpose::STANDARD.encode(json);
+        assert!(deserialize_context(&token).is_err());
+    }
 
-        let msg = context_to_inbound_message(&ctx);
-        assert_eq!(msg.channel, "email");
-        assert_eq!(msg.sender_address, "john@example.com");
-        assert_eq!(msg.topic, "Test Subject");
-        assert_eq!(msg.external_id.as_deref(), Some("<msg@example.com>"));
+    #[test]
+    fn test_minimal_token_is_short() {
+        let token = serialize_context("jiny283", "weather", "2026-03-27_10-00-00", "42");
+        // Minimal token should be well under 200 chars
+        assert!(token.len() < 200, "token too long: {} chars", token.len());
     }
 }

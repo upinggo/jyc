@@ -1,8 +1,8 @@
 use anyhow::Result;
-use base64::Engine;
 use std::path::Path;
 
 use crate::channels::types::InboundMessage;
+use crate::mcp::context;
 use crate::core::email_parser;
 use crate::utils::constants::*;
 
@@ -59,10 +59,20 @@ CRITICAL: Always use jiny_reply_reply_message tool.
     if let Ok(content) = tokio::fs::read_to_string(&system_md_path).await {
         let trimmed = content.trim();
         if !trimmed.is_empty() {
+            tracing::info!(
+                path = %system_md_path.display(),
+                len = trimmed.len(),
+                "system.md loaded"
+            );
             prompt.push('\n');
             prompt.push_str(trimmed);
             prompt.push('\n');
         }
+    } else {
+        tracing::debug!(
+            path = %system_md_path.display(),
+            "No system.md found"
+        );
     }
 
     prompt
@@ -118,7 +128,17 @@ pub async fn build_prompt(
     prompt.push('\n');
 
     // Reply context token
-    let context_token = serialize_reply_context(message, thread_path, message_dir);
+    // Reply context token (minimal — only routing + file location)
+    let thread_name = thread_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let context_token = context::serialize_context(
+        &message.channel,
+        &thread_name,
+        message_dir,
+        &message.channel_uid,
+    );
     prompt.push_str(&format!("\n<reply_context>{context_token}</reply_context>\n"));
 
     Ok(prompt)
@@ -198,45 +218,6 @@ async fn build_conversation_history(
     history
 }
 
-/// Serialize a reply context token (metadata → JSON → base64).
-///
-/// The token is opaque — the AI passes it through unchanged to the reply tool.
-fn serialize_reply_context(
-    message: &InboundMessage,
-    thread_path: &Path,
-    message_dir: &str,
-) -> String {
-    let thread_name = thread_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    // Generate nonce for integrity
-    let nonce = format!(
-        "{}-{}",
-        chrono::Utc::now().timestamp_millis(),
-        &uuid::Uuid::new_v4().to_string()[..8]
-    );
-
-    let context = serde_json::json!({
-        "channel": message.channel,
-        "threadName": thread_name,
-        "sender": message.sender,
-        "recipient": message.sender_address,
-        "topic": message.topic,
-        "timestamp": message.timestamp.to_rfc3339(),
-        "incomingMessageDir": message_dir,
-        "externalId": message.external_id,
-        "threadRefs": message.thread_refs,
-        "uid": message.channel_uid,
-        "_nonce": nonce,
-        "channelMetadata": message.metadata,
-    });
-
-    let json = serde_json::to_string(&context).unwrap_or_default();
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,20 +290,19 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_reply_context() {
-        let msg = test_message();
+    fn test_reply_context_in_prompt() {
+        // Token serialization is now in mcp::context — just verify it appears in the prompt
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        let token = serialize_reply_context(&msg, tmp.path(), "2026-03-27_10-00-00");
+        let msg = test_message();
 
-        // Should be valid base64
-        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&token)
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
-
-        assert_eq!(json["channel"], "email");
-        assert_eq!(json["recipient"], "john@example.com");
-        assert_eq!(json["incomingMessageDir"], "2026-03-27_10-00-00");
-        assert!(json["_nonce"].is_string());
+        let prompt = rt.block_on(build_prompt(&msg, tmp.path(), "2026-03-27_10-00-00", false)).unwrap();
+        assert!(prompt.contains("<reply_context>"));
+        assert!(prompt.contains("</reply_context>"));
+        // Token should be short (minimal fields)
+        let start = prompt.find("<reply_context>").unwrap() + 15;
+        let end = prompt.find("</reply_context>").unwrap();
+        let token = &prompt[start..end];
+        assert!(token.len() < 200, "token too long: {} chars", token.len());
     }
 }

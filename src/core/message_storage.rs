@@ -219,12 +219,27 @@ impl MessageStorage {
     ) -> String {
         let mut md = String::new();
 
-        // YAML frontmatter
+        // YAML frontmatter — includes all metadata needed by the MCP reply tool.
+        // The reply tool reads these fields from disk instead of trusting the AI-passed token.
         md.push_str("---\n");
         md.push_str(&format!("channel: {}\n", message.channel));
         md.push_str(&format!("uid: \"{}\"\n", message.channel_uid));
+        md.push_str(&format!("sender: \"{}\"\n", message.sender));
+        md.push_str(&format!("sender_address: \"{}\"\n", message.sender_address));
         if let Some(ref ext_id) = message.external_id {
             md.push_str(&format!("external_id: \"{ext_id}\"\n"));
+        }
+        if let Some(ref reply_to) = message.reply_to_id {
+            md.push_str(&format!("reply_to_id: \"{reply_to}\"\n"));
+        }
+        if let Some(ref refs) = message.thread_refs {
+            if !refs.is_empty() {
+                let refs_str = refs.iter()
+                    .map(|r| format!("\"{r}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                md.push_str(&format!("thread_refs: [{refs_str}]\n"));
+            }
         }
         if let Some(ref pattern) = message.matched_pattern {
             md.push_str(&format!("matched_pattern: \"{pattern}\"\n"));

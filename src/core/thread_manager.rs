@@ -302,17 +302,17 @@ async fn process_message(
         .await?;
 
     // ── 6. HANDLE AGENT RESULT ────────────────────────────────────────
-    if result.reply_sent_by_tool {
-        tracing::info!("Reply sent by MCP tool");
-    } else if let Some(ref text) = result.reply_text {
-        tracing::info!(text_len = text.len(), "Fallback: sending AI text via outbound");
-        // Outbound adapter handles formatting + sending + storing
-        outbound
-            .send_reply(&message, text, &store_result.thread_path, &store_result.message_dir, None)
-            .await?;
-        tracing::info!("Fallback reply sent");
-    } else {
-        tracing::warn!("No reply text from AI");
+    // "Reply sent by MCP tool" is already logged in service.rs inside the ai span
+    if !result.reply_sent_by_tool {
+        if let Some(ref text) = result.reply_text {
+            tracing::info!(text_len = text.len(), "Fallback: sending AI text via outbound");
+            outbound
+                .send_reply(&message, text, &store_result.thread_path, &store_result.message_dir, None)
+                .await?;
+            tracing::info!("Fallback reply sent");
+        } else {
+            tracing::warn!("No reply text from AI");
+        }
     }
 
     Ok(())

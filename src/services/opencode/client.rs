@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
@@ -69,12 +69,14 @@ impl OpenCodeClient {
     }
 
     /// Get a session by ID. Returns None if not found.
-    pub async fn get_session(&self, session_id: &str) -> Result<Option<SessionInfo>> {
+    pub async fn get_session(&self, session_id: &str, directory: &Path) -> Result<Option<SessionInfo>> {
         let url = format!("{}/session/{}", self.base_url, session_id);
+        let (hdr_name, hdr_val) = Self::directory_header(directory);
 
         let resp = self
             .http
             .get(&url)
+            .header(hdr_name, &hdr_val)
             .timeout(OPENCODE_HEALTH_CHECK_TIMEOUT)
             .send()
             .await
@@ -202,6 +204,7 @@ impl OpenCodeClient {
         let mut last_status_type: Option<String> = None;
         let start_time = Instant::now();
         let mut done = false;
+        let mut logged_tools: HashSet<(String, String)> = HashSet::new();
 
         let mut check_interval = tokio::time::interval(ACTIVITY_CHECK_INTERVAL);
 
@@ -262,6 +265,7 @@ impl OpenCodeClient {
                                     &mut last_activity,
                                     &mut last_tool_name,
                                     &mut last_status_type,
+                                    &mut logged_tools,
                                 );
 
                                 match event_result {
@@ -352,6 +356,7 @@ impl OpenCodeClient {
         last_activity: &mut Instant,
         last_tool_name: &mut Option<String>,
         last_status_type: &mut Option<String>,
+        logged_tools: &mut HashSet<(String, String)>,
     ) -> SseAction {
         match event.event_type.as_str() {
             "server.connected" => {
@@ -406,29 +411,50 @@ impl OpenCodeClient {
 
                     *last_activity = Instant::now();
 
-                    // Track tool state
+                    // Track tool state (deduplicated per step)
                     if part.part_type == "tool" {
                         if let Some(ref tool_name) = part.tool {
                             if let Some(ref state) = part.state {
                                 let status = &state.status;
+                                let dedup_key = (tool_name.clone(), status.clone());
 
                                 match status.as_str() {
                                     "running" => {
                                         *last_tool_name = Some(tool_name.clone());
-                                        tracing::info!(
-                                            tool = %tool_name,
-                                            "Tool running"
-                                        );
+                                        if logged_tools.insert(dedup_key) {
+                                            // Extract tool input preview
+                                            let input_preview = state.input.as_ref()
+                                                .and_then(|v| {
+                                                    v.get("command").and_then(|c| c.as_str()).map(|s| s.to_string())
+                                                        .or_else(|| v.get("pattern").and_then(|c| c.as_str()).map(|s| s.to_string()))
+                                                        .or_else(|| v.get("path").and_then(|c| c.as_str()).map(|s| s.to_string()))
+                                                        .or_else(|| Some(v.to_string()))
+                                                })
+                                                .map(|s| if s.len() > 120 { format!("{}...", &s[..s.floor_char_boundary(120)]) } else { s })
+                                                .unwrap_or_default();
+                                            tracing::info!(
+                                                tool = %tool_name,
+                                                input = %input_preview,
+                                                "Tool running"
+                                            );
+                                        }
                                     }
                                     "completed" => {
                                         *last_tool_name = None;
-                                        if let Some(ref output) = state.output {
-                                            if output.starts_with("Error:") {
-                                                tracing::error!(
-                                                    tool = %tool_name,
-                                                    output = %output,
-                                                    "Tool completed with error"
-                                                );
+                                        if logged_tools.insert(dedup_key) {
+                                            if let Some(ref output) = state.output {
+                                                if output.starts_with("Error:") {
+                                                    tracing::error!(
+                                                        tool = %tool_name,
+                                                        output = %output,
+                                                        "Tool completed with error"
+                                                    );
+                                                } else {
+                                                    tracing::info!(
+                                                        tool = %tool_name,
+                                                        "Tool completed"
+                                                    );
+                                                }
                                             } else {
                                                 tracing::info!(
                                                     tool = %tool_name,
@@ -453,6 +479,7 @@ impl OpenCodeClient {
 
                     // Log step events
                     if part.part_type == "step-start" {
+                        logged_tools.clear(); // Reset tool dedup for new step
                         tracing::info!("Step started");
                     }
                     if part.part_type == "step-finish" {

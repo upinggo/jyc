@@ -32,7 +32,7 @@ pub async fn get_or_create_session(
         if let Ok(content) = tokio::fs::read_to_string(&state_path).await {
             if let Ok(state) = serde_json::from_str::<SessionState>(&content) {
                 // Verify session still exists
-                match client.get_session(&state.session_id).await {
+                match client.get_session(&state.session_id, thread_path).await {
                     Ok(Some(_)) => {
                         tracing::debug!(
                             session_id = %state.session_id,

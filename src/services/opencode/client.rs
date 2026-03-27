@@ -177,6 +177,7 @@ impl OpenCodeClient {
         session_id: &str,
         directory: &Path,
         request: &PromptRequest,
+        mode_label: &str,
     ) -> Result<SseResult> {
         // 1. Subscribe to SSE events scoped to the thread directory
         let sse_url = format!(
@@ -255,6 +256,7 @@ impl OpenCodeClient {
                             let event_result = self.handle_sse_event(
                                     &sse_event,
                                     session_id,
+                                    mode_label,
                                     &mut parts,
                                     &mut result,
                                     &mut last_activity,
@@ -314,7 +316,6 @@ impl OpenCodeClient {
                         tracing::info!(
                             elapsed_secs = elapsed.as_secs(),
                             parts = parts.len(),
-                            model = ?result.model_id,
                             activity = %activity,
                             silence_secs = silence.as_secs(),
                             "Progress"
@@ -345,6 +346,7 @@ impl OpenCodeClient {
         &self,
         event: &SseEvent,
         session_id: &str,
+        mode_label: &str,
         parts: &mut HashMap<String, ResponsePart>,
         result: &mut SseResult,
         last_activity: &mut Instant,
@@ -366,17 +368,15 @@ impl OpenCodeClient {
             "message.updated" => {
                 if let Ok(info) = serde_json::from_value::<MessageInfoWrapper>(
                     event.properties.clone(),
-                ) {
+                 ) {
                     if let Some(ref info) = info.info {
                         if info.session_id.as_deref() == Some(session_id) {
-                            // Log when we first learn the model
+                            // When we first learn the model, record on the parent ai span
                             if result.model_id.is_none() {
                                 if let Some(ref model) = info.model_id {
-                                    tracing::info!(
-                                        model = %model,
-                                        provider = ?info.provider_id,
-                                        "AI model selected"
-                                    );
+                                    let m_value = format!("{}:{}", model, mode_label);
+                                    tracing::Span::current().record("m", &m_value);
+                                    tracing::info!("AI model selected");
                                 }
                             }
                             // Only update if new value is Some (don't overwrite with None)
@@ -453,10 +453,7 @@ impl OpenCodeClient {
 
                     // Log step events
                     if part.part_type == "step-start" {
-                        tracing::info!(
-                            model = ?result.model_id,
-                            "Step started"
-                        );
+                        tracing::info!("Step started");
                     }
                     if part.part_type == "step-finish" {
                         tracing::debug!(

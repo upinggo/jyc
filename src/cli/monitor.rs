@@ -219,7 +219,7 @@ pub async fn run(args: &MonitorArgs, workdir: &Path) -> Result<()> {
         let cancel_child = cancel.clone();
         let channel_name_owned = channel_name.clone();
         let tm = thread_manager.clone();
-        let channel_span = tracing::info_span!("inbound", channel = %channel_name);
+        let channel_span = tracing::info_span!("in", ch = %channel_name);
 
         let task = tokio::spawn(async move {
             let mut monitor = ImapMonitor::new(

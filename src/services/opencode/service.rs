@@ -2,6 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tracing::Instrument;
 
 use super::client::{OpenCodeClient, SseResult};
 use super::types::*;
@@ -93,15 +94,18 @@ impl OpenCodeService {
             parts: vec![PromptPart::Text { text: user_prompt }],
         };
 
-        // 7. Send prompt via SSE streaming
+        // 7. Send prompt via SSE streaming with ai{m=model:mode} span
+        let ai_span = tracing::info_span!("ai", m = tracing::field::Empty);
+        ai_span.record("m", format!(":{}", mode_label));
+
         tracing::info!(
             session_id = %session_id,
-            mode = %mode_label,
             "Sending prompt to OpenCode"
         );
 
         let sse_result = client
-            .prompt_with_sse(&session_id, thread_path, &request)
+            .prompt_with_sse(&session_id, thread_path, &request, &mode_label)
+            .instrument(ai_span.clone())
             .await;
 
         // 8. Handle result
@@ -109,7 +113,7 @@ impl OpenCodeService {
             Ok(result) => {
                 self.handle_sse_result(
                     result, thread_name, thread_path,
-                    &client, &session_id, &request,
+                    &client, &session_id, &request, &mode_label,
                 ).await?
             }
             Err(e) => {
@@ -138,6 +142,7 @@ impl OpenCodeService {
         client: &OpenCodeClient,
         session_id: &str,
         request: &PromptRequest,
+        mode_label: &str,
     ) -> Result<GenerateReplyResult> {
         // ContextOverflow recovery
         if let Some(ref error) = result.error {
@@ -157,7 +162,7 @@ impl OpenCodeService {
             || session::check_signal_file(thread_path).await;
 
         if reply_sent {
-            tracing::info!(model = ?result.model_id, "Reply sent by MCP tool");
+            tracing::info!("Reply sent by MCP tool");
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: true,
                 reply_text: None,
@@ -178,7 +183,7 @@ impl OpenCodeService {
             session::delete_session(thread_path).await?;
             let new_id = session::create_new_session(client, thread_path).await?;
             session::cleanup_signal_file(thread_path).await;
-            let retry = client.prompt_with_sse(&new_id, thread_path, request).await?;
+            let retry = client.prompt_with_sse(&new_id, thread_path, request, mode_label).await?;
             let sent = retry.reply_sent_by_tool || session::check_signal_file(thread_path).await;
             if sent {
                 return Ok(GenerateReplyResult {

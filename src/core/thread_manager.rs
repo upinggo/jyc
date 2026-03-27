@@ -138,7 +138,7 @@ impl ThreadManager {
         let storage = self.storage.clone();
         let outbound = self.outbound.clone();
         let agent = self.agent.clone();
-        let worker_span = tracing::info_span!("worker", channel = tracing::field::Empty, thread = %thread_name);
+        let tm_span = tracing::info_span!("tm", t = %thread_name);
 
         tokio::spawn(async move {
             let _permit = tokio::select! {
@@ -148,8 +148,6 @@ impl ThreadManager {
                 },
                 _ = cancel.cancelled() => return,
             };
-
-            let mut channel_name: Option<String> = None;
 
             tracing::info!("Worker started");
 
@@ -164,12 +162,6 @@ impl ThreadManager {
                         break;
                     }
                 };
-
-                // Capture channel name from first message
-                if channel_name.is_none() {
-                    channel_name = Some(item.message.channel.clone());
-                    tracing::Span::current().record("channel", &item.message.channel.as_str());
-                }
 
                 if let Err(e) = process_message(
                     &item,
@@ -186,7 +178,7 @@ impl ThreadManager {
             }
 
             tracing::info!("Worker finished");
-        }.instrument(worker_span))
+        }.instrument(tm_span))
     }
 
     pub async fn get_stats(&self) -> QueueStats {

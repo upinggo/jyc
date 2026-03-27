@@ -1,0 +1,21 @@
+#!/bin/bash
+cd /opt/jyc
+
+# Ensure HOME is set (s6-overlay may not set it)
+export HOME="${HOME:-/root}"
+
+# Separate cargo target dir for container builds
+# (avoids conflict with host macOS builds when source is bind-mounted)
+export CARGO_TARGET_DIR="/tmp/jyc-target"
+
+# Load .env file if it exists (for config.toml ${VAR} substitution)
+if [ -f .env ]; then
+  set -a
+  source .env
+  set +a
+fi
+
+# Configure git to use .netrc for GitHub HTTPS access
+git config --global credential.helper netrc
+
+exec /usr/local/bin/jyc monitor --workdir /opt/jyc --debug

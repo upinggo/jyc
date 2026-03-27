@@ -1,0 +1,11 @@
+# Exclude from Docker build context
+target/
+.jyc/
+.git/
+config.toml
+docker/.env
+
+# Keep docker/README.md
+*.md
+!docker/README.md
+!docker/system.md.example

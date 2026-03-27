@@ -1,0 +1,41 @@
+services:
+  jyc:
+    image: jyc:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      # JYC data directory (config.toml, channels, workspace)
+      - ${JYC_DATA_DIR:-./}:/opt/jyc
+
+      # OpenCode global config (API keys, providers, model settings)
+      - ${OPENCODE_CONFIG}:/root/.config/opencode/opencode.jsonc:ro
+
+      # OpenCode data (sessions DB, logs, snapshots — persisted across restarts)
+      - ${OPENCODE_DATA_DIR:-opencode-data}:/root/.local/share/opencode
+
+      # Cargo registry cache (persists crate downloads across container rebuilds)
+      - cargo-registry:/root/.cargo/registry
+      - cargo-git:/root/.cargo/git
+
+      # Skills (read-only — used by OpenCode AI)
+      - ${CLAUDE_SKILLS_DIR:-~/.claude/skills}:/root/.claude/skills:ro
+      - ${AGENT_SKILLS_DIR:-~/.agents/skills}:/root/.agents/skills:ro
+      - ${NETWORKCALC_DIR}:/opt/jyc/jiny283a/workspace/networkcalc/c21-networkcalculation-srv
+      - ${JYC_DIR}:/opt/jyc/jiny283a/workspace/self-hosting-jyc/jyc
+      # Project source directories (mounted into thread workspaces for AI access)
+      # The AI's working directory is the thread dir, so source must be inside the workspace.
+      # Example: mount jyc source into a bootstrapping thread's workspace:
+      #   - ${JYC_SRC_DIR}:/opt/jyc/<channel>/workspace/<thread>/jyc
+      # Customize these mounts per your channel/thread layout.
+
+      # Git/GitHub credentials
+      - ${JYC_DATA_DIR}/.netrc:/root/.netrc
+      - ${JYC_DATA_DIR}/gh_hosts.yml:/root/.config/gh/hosts.yml
+    restart: unless-stopped
+
+# Named volumes
+volumes:
+  opencode-data:    # OpenCode sessions, logs
+  cargo-registry:   # Cargo crate downloads cache
+  cargo-git:        # Cargo git dependency cache

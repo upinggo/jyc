@@ -2,7 +2,7 @@
 
 ## Overview
 
-JYC is a Rust rewrite of jiny-m — a channel-agnostic AI agent that operates through messaging channels. Users interact with the agent by sending messages (email, FeiShu, Slack, etc.), and the agent responds autonomously using OpenCode AI. The agent maintains conversation context per thread, enabling coherent multi-turn interactions.
+JYC is a channel-agnostic AI agent that operates through messaging channels. Users interact with the agent by sending messages (email, FeiShu, Slack, etc.), and the agent responds autonomously using OpenCode AI. The agent maintains conversation context per thread, enabling coherent multi-turn interactions.
 
 **Core Concept:** Messaging channels are the interface; AI is the brain. The architecture is channel-agnostic — adding a new channel requires only implementing an inbound and outbound adapter trait.
 
@@ -476,7 +476,7 @@ Each inbound adapter implements `derive_thread_name()` with channel-specific log
 
 ### Overview
 
-JYC uses **Tokio** as its async runtime. The message processing pipeline is built on a hierarchy of `tokio::sync::mpsc` channels and a `Semaphore` for bounded concurrency. This replaces jiny-m's callback-based `ThreadManager` with an idiomatic Rust async design.
+JYC uses **Tokio** as its async runtime. The message processing pipeline is built on a hierarchy of `tokio::sync::mpsc` channels and a `Semaphore` for bounded concurrency.
 
 ### Channel & Task Topology
 
@@ -1895,7 +1895,7 @@ pub struct CommandResult {
 
 ### Unified Command Processing
 
-Unlike jiny-m, which splits command parsing (`CommandRegistry.parseCommands`) and body stripping (`thread-manager.ts`) into two separate passes over the message body, JYC unifies these into a single `process_commands()` method. This eliminates duplicated scanning logic and keeps command-related concerns in one place.
+JYC unifies command parsing, execution, and body stripping into a single `process_commands()` method. This keeps all command-related concerns in one place.
 
 ```rust
 /// Output of unified command processing
@@ -1984,8 +1984,8 @@ if output.body_empty && !output.results.is_empty() {
 message.content.text = Some(output.cleaned_body);
 ```
 
-**Key design differences from jiny-m:**
-- **Single pass**: jiny-m scans the body twice (once in `parseCommands`, once in thread-manager for stripping). JYC does it once.
+**Key design decisions:**
+- **Single pass**: Commands are parsed, executed, and stripped in one scan of the body.
 - **Single responsibility**: All command-related logic (parsing, executing, stripping) lives in `CommandRegistry`. `ThreadManager` only checks `body_empty` and `results`.
 - **Testable**: One function in, one struct out. Easy to unit test without mocking ThreadManager.
 
@@ -2072,25 +2072,3 @@ Configurable per pattern via `attachments` in the pattern config.
 | `uuid` | 1.x (features: v4) | Internal message IDs |
 | `tokio-util` | 0.7.x | CancellationToken |
 | `async-trait` | 0.1.x | Async trait support |
-
-## Differences from jiny-m (TypeScript)
-
-| Aspect | jiny-m (TypeScript/Bun) | jyc (Rust) |
-|--------|------------------------|------------|
-| Binary | Two binaries (`jiny-m` + `jiny-m-reply-tool`) | Single binary with hidden subcommand |
-| Config | JSON with comments (`.jyc/config.json`) | TOML (`config.toml`) |
-| Concurrency | Promise-based, manual worker counting | `tokio::Semaphore` + `mpsc` channels |
-| Error handling | try/catch, errors swallowed in workers | `anyhow::Result`, `?` propagation with context |
-| Logging | Custom Logger with EventEmitter | `tracing` with subscriber layers |
-| Alert subscription | Logger EventEmitter `on('log')` | Custom `tracing::Layer` + mpsc |
-| IMAP | `imapflow` (JS) | `async-imap` (Rust) |
-| SMTP | `nodemailer` (JS) | `lettre` (Rust) |
-| Email parsing | `mailparser` (JS) | `mail-parser` (Rust) |
-| MD → HTML | `marked` (JS) | `comrak` (Rust, GFM support) |
-| HTML → MD | `turndown` (JS) | `htmd` (Rust) |
-| MCP | `@modelcontextprotocol/sdk` (JS) | `rmcp` (Rust) |
-| SSE | `@opencode-ai/sdk` built-in | `reqwest-eventsource` |
-| Shutdown | `process.on('SIGINT')` | `CancellationToken` hierarchy |
-| Thread queues | Array + manual scheduling | `tokio::sync::mpsc` bounded channels |
-| Memory | GC-managed | Ownership + RAII |
-| Backward compat | 3 config formats + migrations | Clean start, TOML only |

@@ -2,6 +2,36 @@
 
 All notable changes to JYC will be documented in this file.
 
+## [0.0.6] - 2026-03-27
+
+### Changed
+
+**Token format: `REPLY_TOKEN=`**
+- `<reply_context>TOKEN</reply_context>` → `REPLY_TOKEN=TOKEN` — no XML tags, avoids triggering AI's "parse structured data" instinct
+- Tool parameter description updated to reference `REPLY_TOKEN=` line
+- Prompt echo stripping marker updated
+
+**Conversation history removed from AI prompt**
+- OpenCode session memory handles multi-turn conversation context
+- `build_conversation_history()` function removed (dead code)
+- `include_history` parameter removed from `build_prompt()`
+- System prompt simplified — no "Conversation history" section reference
+- `include_thread_history` config field deprecated (kept for backward compat but ignored)
+
+**DESIGN.md comprehensive update**
+- Removed all jiny-m references (moved to IMPLEMENTATION.md)
+- Removed "Differences from jiny-m" comparison table
+- PromptBuilder: updated for no history, REPLY_TOKEN format
+- ReplyContext → Reply Token: minimal 5-field description
+- Context Management Strategy: rewritten for session-based (not prompt-based)
+- Data Flow Summary, sequence diagram, block diagrams: all updated
+- MCP Tool section: reads from disk, not token
+- Stripping Strategy table: removed AI Prompt Context row
+- Config example: removed `include_thread_history`
+
+**Cargo.toml description**
+- Removed "Rust rewrite of jiny-m" — JYC is its own project
+
 ## [0.0.5] - 2026-03-27
 
 ### Changed

@@ -70,19 +70,7 @@ impl OpenCodeService {
         // 4. Clean up stale signal file
         session::cleanup_signal_file(thread_path).await;
 
-        // 5. Build prompts
-        let system_prompt = prompt_builder::build_system_prompt(
-            thread_path,
-            self.agent_config.opencode.as_ref().and_then(|o| o.system_prompt.as_deref()),
-        ).await;
-
-        let user_prompt = prompt_builder::build_prompt(
-            message,
-            thread_path,
-            message_dir,
-        ).await?;
-
-        // 6. Read model (from override or config) and mode (from override)
+        // 5. Read model (from override or config) and mode (from override)
         let model = session::read_model_override(thread_path)
             .await
             .or_else(|| {
@@ -100,6 +88,20 @@ impl OpenCodeService {
         };
 
         let mode_label = agent_mode.as_deref().unwrap_or("build").to_string();
+
+        // 6. Build prompts with model and mode
+        let system_prompt = prompt_builder::build_system_prompt(
+            thread_path,
+            self.agent_config.opencode.as_ref().and_then(|o| o.system_prompt.as_deref()),
+        ).await;
+
+        let user_prompt = prompt_builder::build_prompt(
+            message,
+            thread_path,
+            message_dir,
+            model.as_deref(),
+            agent_mode.as_deref(),
+        ).await?;
 
         // Model and mode are passed per-prompt — no session restart needed for switches
         let request = PromptRequest {
@@ -138,7 +140,7 @@ impl OpenCodeService {
                     .await?;
                 self.handle_blocking_result(
                     blocking_result, thread_name, thread_path,
-                    &client, &session_id, &request,
+                    &client, &session_id, &request, &mode_label,
                 ).await?
             }
         };
@@ -183,6 +185,7 @@ impl OpenCodeService {
                 reply_text: None,
                 model_id: result.model_id,
                 provider_id: result.provider_id,
+                mode: Some(mode_label.to_string()),
             });
         }
 
@@ -204,12 +207,14 @@ impl OpenCodeService {
                 return Ok(GenerateReplyResult {
                     reply_sent_by_tool: true, reply_text: None,
                     model_id: retry.model_id, provider_id: retry.provider_id,
+                    mode: Some(mode_label.to_string()),
                 });
             }
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: false,
                 reply_text: extract_text_from_parts(&retry.parts),
                 model_id: retry.model_id, provider_id: retry.provider_id,
+                mode: Some(mode_label.to_string()),
             });
         }
 
@@ -219,12 +224,14 @@ impl OpenCodeService {
                 return Ok(GenerateReplyResult {
                     reply_sent_by_tool: true, reply_text: None,
                     model_id: result.model_id, provider_id: result.provider_id,
+                    mode: Some(mode_label.to_string()),
                 });
             }
             tracing::error!("Timed out with no reply");
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: false, reply_text: None,
                 model_id: result.model_id, provider_id: result.provider_id,
+                mode: Some(mode_label.to_string()),
             });
         }
 
@@ -234,6 +241,7 @@ impl OpenCodeService {
             reply_text: extract_text_from_parts(&result.parts),
             model_id: result.model_id,
             provider_id: result.provider_id,
+            mode: Some(mode_label.to_string()),
         })
     }
 
@@ -246,6 +254,7 @@ impl OpenCodeService {
         _client: &OpenCodeClient,
         _session_id: &str,
         _request: &PromptRequest,
+        mode_label: &str,
     ) -> Result<GenerateReplyResult> {
         if let Some(ref data) = result.data {
             if let Some(ref info) = data.info {
@@ -259,11 +268,18 @@ impl OpenCodeService {
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: true, reply_text: None,
                 model_id: None, provider_id: None,
+                mode: Some(mode_label.to_string()),
             });
         }
 
         let parts = result.data.map(|d| d.parts).unwrap_or_default();
         Ok(GenerateReplyResult {
+            reply_sent_by_tool: false,
+            reply_text: extract_text_from_parts(&parts),
+            model_id: None,
+            provider_id: None,
+            mode: Some(mode_label.to_string()),
+        })
             reply_sent_by_tool: false,
             reply_text: extract_text_from_parts(&parts),
             model_id: None, provider_id: None,
@@ -285,6 +301,8 @@ impl AgentService for OpenCodeService {
         Ok(AgentResult {
             reply_sent_by_tool: result.reply_sent_by_tool,
             reply_text: result.reply_text,
+            model: result.model_id,
+            mode: result.mode,
         })
     }
 }

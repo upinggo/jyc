@@ -85,6 +85,8 @@ pub async fn build_prompt(
     message: &InboundMessage,
     thread_path: &Path,
     message_dir: &str,
+    model: Option<&str>,
+    mode: Option<&str>,
 ) -> Result<String> {
     let mut prompt = String::new();
 
@@ -113,8 +115,7 @@ pub async fn build_prompt(
     prompt.push_str(&truncated);
     prompt.push('\n');
 
-    // Reply context token
-    // Reply context token (minimal — only routing + file location)
+    // Reply context token (minimal — routing + file location + model + mode)
     let thread_name = thread_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -124,6 +125,8 @@ pub async fn build_prompt(
         &thread_name,
         message_dir,
         &message.channel_uid,
+        model,
+        mode,
     );
     prompt.push_str(&format!("\nREPLY_TOKEN={context_token}\n"));
 
@@ -190,7 +193,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let msg = test_message();
 
-        let prompt = build_prompt(&msg, tmp.path(), "2026-03-27_10-00-00")
+        let prompt = build_prompt(&msg, tmp.path(), "2026-03-27_10-00-00", None, None)
             .await
             .unwrap();
 
@@ -199,6 +202,22 @@ mod tests {
         assert!(prompt.contains("john@example.com"));
         assert!(prompt.contains("Hello, help me."));
         assert!(prompt.contains("REPLY_TOKEN="));
+    }
+
+    #[test]
+    fn test_reply_token_in_prompt() {
+        // Token serialization is now in mcp::context — just verify it appears in prompt
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let msg = test_message();
+
+        let prompt = rt.block_on(build_prompt(&msg, tmp.path(), "2026-03-27_10-00-00", None, None).unwrap();
+        assert!(prompt.contains("REPLY_TOKEN="));
+        // Token should be short (minimal fields)
+        let start = prompt.find("REPLY_TOKEN=").unwrap() + 12;
+        let end = prompt[start..].find('\n').map(|i| start + i).unwrap_or(prompt.len());
+        let token = &prompt[start..end];
+        assert!(token.len() < 200, "token too long: {} chars", token.len());
     }
 
     #[test]

@@ -66,6 +66,8 @@ impl EmailOutboundAdapter {
         thread_path: &Path,
         message_dir: &str,
         attachments: Option<&[OutboundAttachment]>,
+        model: Option<&str>,
+        mode: Option<&str>,
     ) -> Result<SendResult> {
         // 1. Build full reply with email-specific quoted history
         let body_text = original
@@ -83,6 +85,8 @@ impl EmailOutboundAdapter {
             &original.topic,
             body_text,
             message_dir,
+            model,
+            mode,
         )
         .await;
 

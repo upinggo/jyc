@@ -163,12 +163,14 @@ pub struct SessionErrorDetail {
 /// Result of AI reply generation.
 #[derive(Debug)]
 pub struct GenerateReplyResult {
-    /// Whether the reply was sent by the MCP tool (vs fallback)
+    /// Whether reply was sent by MCP tool (vs fallback)
     pub reply_sent_by_tool: bool,
-    /// Accumulated text from the AI (for fallback direct send)
+    /// Accumulated text from AI (for fallback direct send)
     pub reply_text: Option<String>,
     /// Model used for generation
     pub model_id: Option<String>,
     /// Provider used
     pub provider_id: Option<String>,
+    /// Mode used for generation
+    pub mode: Option<String>,
 }

@@ -270,7 +270,15 @@ async fn process_message(
 
         // Outbound adapter handles formatting + sending + storing
         outbound
-            .send_reply(message, &summary, &store_result.thread_path, &store_result.message_dir, None)
+            .send_reply(
+                message,
+                &summary,
+                &store_result.thread_path,
+                &store_result.message_dir,
+                None,
+                None,
+                None,
+            )
             .await?;
     }
 
@@ -307,7 +315,15 @@ async fn process_message(
         if let Some(ref text) = result.reply_text {
             tracing::info!(text_len = text.len(), "Fallback: sending AI text via outbound");
             outbound
-                .send_reply(&message, text, &store_result.thread_path, &store_result.message_dir, None)
+                .send_reply(
+                    &message,
+                    text,
+                    &store_result.thread_path,
+                    &store_result.message_dir,
+                    None,
+                    result.model.as_deref(),
+                    result.mode.as_deref(),
+                )
                 .await?;
             tracing::info!("Fallback reply sent");
         } else {

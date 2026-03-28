@@ -2,8 +2,8 @@ use anyhow::Result;
 use std::path::Path;
 
 use crate::channels::types::InboundMessage;
-use crate::mcp::context;
 use crate::core::email_parser;
+use crate::mcp::context;
 use crate::utils::constants::MAX_BODY_IN_PROMPT;
 
 /// Build the system prompt for OpenCode.
@@ -13,10 +13,7 @@ use crate::utils::constants::MAX_BODY_IN_PROMPT;
 /// - Security: directory boundary rules
 /// - Reply instructions (use jiny_reply_reply_message tool)
 /// - Optional thread-specific system.md
-pub async fn build_system_prompt(
-    thread_path: &Path,
-    config_system_prompt: Option<&str>,
-) -> String {
+pub async fn build_system_prompt(thread_path: &Path, config_system_prompt: Option<&str>) -> String {
     let mut prompt = String::new();
 
     // Config-level system prompt
@@ -42,8 +39,7 @@ After you have replied to the current message, STOP. Do not do anything else.
 ## Reply Instructions
 When replying to a message, use the jiny_reply_reply_message tool:
 - `token`: Pass the value after REPLY_TOKEN= exactly as-is (do not decode or modify it)
-CRITICAL: DO NOT decode, modify, re-encode, or add any formatting (backticks, quotes, spaces, newlines) to the token.
-Any change—even a single character—will break the reply.
+**WARN: DO NOT decode, modify, re-encode, or add any formatting (backticks, quotes, spaces, newlines) to the token. Any change—even a single character—will break the reply.**
 - `message`: Your reply text
 - `attachments`: Optional filenames to attach from the working directory
 After a successful reply, STOP immediately. Do NOT call any other tools or perform further actions.
@@ -95,10 +91,7 @@ pub async fn build_prompt(
         message.sender, message.sender_address
     ));
     prompt.push_str(&format!("**Subject:** {}\n", message.topic));
-    prompt.push_str(&format!(
-        "**Date:** {}\n\n",
-        message.timestamp.to_rfc3339()
-    ));
+    prompt.push_str(&format!("**Date:** {}\n\n", message.timestamp.to_rfc3339()));
 
     // Body (stripped + truncated)
     let body = message
@@ -134,7 +127,7 @@ pub async fn build_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::channels::types::{MessageContent, InboundMessage};
+    use crate::channels::types::{InboundMessage, MessageContent};
     use std::collections::HashMap;
 
     fn test_message() -> InboundMessage {
@@ -164,10 +157,7 @@ mod tests {
     #[tokio::test]
     async fn test_build_system_prompt() {
         let tmp = tempfile::tempdir().unwrap();
-        let prompt = build_system_prompt(
-            tmp.path(),
-            Some("Be helpful."),
-        ).await;
+        let prompt = build_system_prompt(tmp.path(), Some("Be helpful.")).await;
 
         assert!(prompt.contains("Be helpful."));
         assert!(prompt.contains("jiny_reply_reply_message"));
@@ -177,10 +167,9 @@ mod tests {
     #[tokio::test]
     async fn test_build_system_prompt_with_system_md() {
         let tmp = tempfile::tempdir().unwrap();
-        tokio::fs::write(
-            tmp.path().join("system.md"),
-            "You are a code reviewer.",
-        ).await.unwrap();
+        tokio::fs::write(tmp.path().join("system.md"), "You are a code reviewer.")
+            .await
+            .unwrap();
 
         let prompt = build_system_prompt(tmp.path(), None).await;
         assert!(prompt.contains("You are a code reviewer."));
@@ -203,7 +192,10 @@ mod tests {
 
         // Token should be short (minimal fields + optional model/mode)
         let start = prompt.find("REPLY_TOKEN=").unwrap() + 12;
-        let end = prompt[start..].find('\n').map(|i| start + i).unwrap_or(prompt.len());
+        let end = prompt[start..]
+            .find('\n')
+            .map(|i| start + i)
+            .unwrap_or(prompt.len());
         let token = &prompt[start..end];
         assert!(token.len() < 300, "token too long: {} chars", token.len());
     }

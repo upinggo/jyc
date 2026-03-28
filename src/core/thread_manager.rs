@@ -276,6 +276,8 @@ async fn process_message(
                 &store_result.thread_path,
                 &store_result.message_dir,
                 None,
+                None,
+                None,
             )
             .await?;
     }
@@ -308,7 +310,7 @@ async fn process_message(
         .await?;
 
     // ── 6. HANDLE AGENT RESULT ────────────────────────────────────────
-    // "Reply sent by MCP tool" is already logged in service.rs inside the ai span
+    // "Reply sent by MCP tool" is already logged in service.rs inside ai span
     if !result.reply_sent_by_tool {
         if let Some(ref text) = result.reply_text {
             tracing::info!(text_len = text.len(), "Fallback: sending AI text via outbound");
@@ -319,6 +321,8 @@ async fn process_message(
                     &store_result.thread_path,
                     &store_result.message_dir,
                     None,
+                    result.model.as_deref(),
+                    result.mode.as_deref(),
                 )
                 .await?;
             tracing::info!("Fallback reply sent");

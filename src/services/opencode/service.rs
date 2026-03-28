@@ -99,6 +99,8 @@ impl OpenCodeService {
             message,
             thread_path,
             message_dir,
+            model.as_deref(),
+            mode_override.as_deref(),
         ).await?;
 
         // Model and mode are passed per-prompt — no session restart needed for switches
@@ -138,7 +140,7 @@ impl OpenCodeService {
                     .await?;
                 self.handle_blocking_result(
                     blocking_result, thread_name, thread_path,
-                    &client, &session_id, &request,
+                    &client, &session_id, &request, &mode_label,
                 ).await?
             }
         };
@@ -167,7 +169,7 @@ impl OpenCodeService {
                 let new_id = session::create_new_session(client, thread_path).await?;
                 let retry = client.prompt_blocking(&new_id, thread_path, request).await?;
                 return self.handle_blocking_result(
-                    retry, thread_name, thread_path, client, &new_id, request,
+                    retry, thread_name, thread_path, client, &new_id, request, mode_label,
                 ).await;
             }
         }
@@ -183,6 +185,7 @@ impl OpenCodeService {
                 reply_text: None,
                 model_id: result.model_id,
                 provider_id: result.provider_id,
+                mode: Some(mode_label.to_string()),
             });
         }
 
@@ -204,12 +207,14 @@ impl OpenCodeService {
                 return Ok(GenerateReplyResult {
                     reply_sent_by_tool: true, reply_text: None,
                     model_id: retry.model_id, provider_id: retry.provider_id,
+                    mode: Some(mode_label.to_string()),
                 });
             }
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: false,
                 reply_text: extract_text_from_parts(&retry.parts),
                 model_id: retry.model_id, provider_id: retry.provider_id,
+                mode: Some(mode_label.to_string()),
             });
         }
 
@@ -219,12 +224,14 @@ impl OpenCodeService {
                 return Ok(GenerateReplyResult {
                     reply_sent_by_tool: true, reply_text: None,
                     model_id: result.model_id, provider_id: result.provider_id,
+                    mode: Some(mode_label.to_string()),
                 });
             }
             tracing::error!("Timed out with no reply");
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: false, reply_text: None,
                 model_id: result.model_id, provider_id: result.provider_id,
+                mode: Some(mode_label.to_string()),
             });
         }
 
@@ -234,6 +241,7 @@ impl OpenCodeService {
             reply_text: extract_text_from_parts(&result.parts),
             model_id: result.model_id,
             provider_id: result.provider_id,
+            mode: Some(mode_label.to_string()),
         })
     }
 
@@ -246,6 +254,7 @@ impl OpenCodeService {
         _client: &OpenCodeClient,
         _session_id: &str,
         _request: &PromptRequest,
+        mode_label: &str,
     ) -> Result<GenerateReplyResult> {
         if let Some(ref data) = result.data {
             if let Some(ref info) = data.info {
@@ -259,6 +268,7 @@ impl OpenCodeService {
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: true, reply_text: None,
                 model_id: None, provider_id: None,
+                mode: Some(mode_label.to_string()),
             });
         }
 
@@ -267,6 +277,7 @@ impl OpenCodeService {
             reply_sent_by_tool: false,
             reply_text: extract_text_from_parts(&parts),
             model_id: None, provider_id: None,
+            mode: Some(mode_label.to_string()),
         })
     }
 }
@@ -285,6 +296,8 @@ impl AgentService for OpenCodeService {
         Ok(AgentResult {
             reply_sent_by_tool: result.reply_sent_by_tool,
             reply_text: result.reply_text,
+            model: result.model_id,
+            mode: result.mode,
         })
     }
 }
@@ -296,6 +309,7 @@ struct GenerateReplyResult {
     reply_text: Option<String>,
     model_id: Option<String>,
     provider_id: Option<String>,
+    mode: Option<String>,
 }
 
 /// Extract text content from accumulated response parts.

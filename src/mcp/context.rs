@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 /// - `threadName`: thread directory name (for logging)
 /// - `incomingMessageDir`: message subdirectory name (to find received.md)
 /// - `uid`: channel-specific message ID
+/// - `model`: AI model used (optional, for footer display)
+/// - `mode`: AI mode used (optional, for footer display)
 /// - `_nonce`: integrity nonce
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplyContext {
@@ -26,6 +28,10 @@ pub struct ReplyContext {
     pub incoming_message_dir: String,
     /// Channel-specific message ID (e.g., IMAP UID)
     pub uid: String,
+    /// AI model used (e.g., "claude-sonnet-4-20250514") — optional
+    pub model: Option<String>,
+    /// AI mode used (e.g., "build", "plan") — optional
+    pub mode: Option<String>,
     /// Integrity nonce
     #[serde(rename = "_nonce")]
     pub nonce: Option<String>,
@@ -39,6 +45,8 @@ pub fn serialize_context(
     thread_name: &str,
     incoming_message_dir: &str,
     uid: &str,
+    model: Option<&str>,
+    mode: Option<&str>,
 ) -> String {
     let nonce = format!(
         "{}-{}",
@@ -51,6 +59,8 @@ pub fn serialize_context(
         thread_name: thread_name.to_string(),
         incoming_message_dir: incoming_message_dir.to_string(),
         uid: uid.to_string(),
+        model: model.map(|m| m.to_string()),
+        mode: mode.map(|m| m.to_string()),
         nonce: Some(nonce),
     };
 
@@ -96,13 +106,22 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_round_trip() {
-        let token = serialize_context("jiny283", "weather", "2026-03-27_10-00-00", "42");
+        let token = serialize_context(
+            "jiny283",
+            "weather",
+            "2026-03-27_10-00-00",
+            "42",
+            None,
+            None,
+        );
         let ctx = deserialize_context(&token).unwrap();
         assert_eq!(ctx.channel, "jiny283");
         assert_eq!(ctx.thread_name, "weather");
         assert_eq!(ctx.incoming_message_dir, "2026-03-27_10-00-00");
         assert_eq!(ctx.uid, "42");
         assert!(ctx.nonce.is_some());
+        assert!(ctx.model.is_none());
+        assert!(ctx.mode.is_none());
     }
 
     #[test]
@@ -133,8 +152,46 @@ mod tests {
 
     #[test]
     fn test_minimal_token_is_short() {
-        let token = serialize_context("jiny283", "weather", "2026-03-27_10-00-00", "42");
-        // Minimal token should be well under 200 chars
-        assert!(token.len() < 200, "token too long: {} chars", token.len());
+        let token = serialize_context(
+            "jiny283",
+            "weather",
+            "2026-03-27_10-00-00",
+            "42",
+            None,
+            None,
+        );
+        // Minimal token should be well under 300 chars (includes optional fields)
+        assert!(token.len() < 300, "token too long: {} chars", token.len());
+    }
+
+    #[test]
+    fn test_serialize_with_model_and_mode() {
+        let token = serialize_context(
+            "jiny283",
+            "weather",
+            "2026-03-27_10-00-00",
+            "42",
+            Some("claude-sonnet-4-20250514"),
+            Some("build"),
+        );
+        let ctx = deserialize_context(&token).unwrap();
+        assert_eq!(ctx.channel, "jiny283");
+        assert_eq!(ctx.model, Some("claude-sonnet-4-20250514".to_string()));
+        assert_eq!(ctx.mode, Some("build".to_string()));
+    }
+
+    #[test]
+    fn test_backward_compat_with_old_token() {
+        // Old token format without model/mode fields should still work
+        let json = r#"{"channel":"jiny283","threadName":"weather","incomingMessageDir":"2026-03-27_10-00-00","uid":"42","_nonce":"123456789-abc12345"}"#;
+        let token = base64::engine::general_purpose::STANDARD.encode(json);
+        let ctx = deserialize_context(&token).unwrap();
+        assert_eq!(ctx.channel, "jiny283");
+        assert_eq!(ctx.thread_name, "weather");
+        assert_eq!(ctx.incoming_message_dir, "2026-03-27_10-00-00");
+        assert_eq!(ctx.uid, "42");
+        // New fields should be None when not present
+        assert!(ctx.model.is_none());
+        assert!(ctx.mode.is_none());
     }
 }

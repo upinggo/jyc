@@ -123,6 +123,8 @@ pub async fn build_prompt(
         &thread_name,
         message_dir,
         &message.channel_uid,
+        None,
+        None,
     );
     prompt.push_str(&format!("\nREPLY_TOKEN={context_token}\n"));
 
@@ -199,10 +201,10 @@ mod tests {
         assert!(prompt.contains("Hello, help me."));
         assert!(prompt.contains("REPLY_TOKEN="));
 
-        // Token should be short (minimal fields)
+        // Token should be short (minimal fields + optional model/mode)
         let start = prompt.find("REPLY_TOKEN=").unwrap() + 12;
         let end = prompt[start..].find('\n').map(|i| start + i).unwrap_or(prompt.len());
         let token = &prompt[start..end];
-        assert!(token.len() < 200, "token too long: {} chars", token.len());
+        assert!(token.len() < 300, "token too long: {} chars", token.len());
     }
 }

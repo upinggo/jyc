@@ -271,6 +271,8 @@ async fn handle_reply(
             thread_path,
             &ctx.incoming_message_dir,
             if outbound_attachments.is_empty() { None } else { Some(&outbound_attachments) },
+            ctx.model.as_deref(),
+            ctx.mode.as_deref(),
         )
         .await?;
     outbound.disconnect().await?;

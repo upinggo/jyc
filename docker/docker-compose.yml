@@ -16,8 +16,9 @@ services:
       - ${OPENCODE_DATA_DIR:-opencode-data}:/root/.local/share/opencode
 
       # Cargo registry cache (persists crate downloads across container rebuilds)
-      - cargo-registry:/root/.cargo/registry
-      - cargo-git:/root/.cargo/git
+      # Dev image: Rust at /usr/local/cargo. Production: no Rust, these are no-ops.
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
 
       # Skills (read-only — used by OpenCode AI)
       - ${CLAUDE_SKILLS_DIR:-~/.claude/skills}:/root/.claude/skills:ro

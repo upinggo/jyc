@@ -45,7 +45,7 @@ ENV CARGO_TARGET_DIR="/tmp/jyc-target"
 
 WORKDIR /opt/jyc
 
-VOLUME ["/opt/jyc", "/root/.config/opencode", "/root/.claude/skills", "/root/.agents/skills", "/root/.netrc", "/root/.config/gh/hosts.yml"]
+VOLUME ["/opt/jyc", "/root/.config/opencode", "/root/.claude/skills", "/root/.agents/skills"]
 
 ENTRYPOINT ["/init"]
 

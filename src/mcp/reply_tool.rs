@@ -7,7 +7,7 @@ use rmcp::{
 };
 use std::path::{Path, PathBuf};
 
-use super::context::deserialize_context;
+use super::context::{load_reply_context, cleanup_reply_context};
 use crate::channels::email::outbound::EmailOutboundAdapter;
 use crate::channels::types::OutboundAttachment;
 use crate::config;
@@ -54,8 +54,6 @@ impl McpLogger {
 pub struct ReplyMessageParams {
     #[schemars(description = "The reply text to send")]
     pub message: String,
-    #[schemars(description = "The opaque token value from the REPLY_TOKEN= line. Pass it exactly as-is.")]
-    pub token: String,
     #[schemars(description = "Optional list of filenames within the thread directory to attach")]
     pub attachments: Option<Vec<String>>,
 }
@@ -85,9 +83,8 @@ impl ReplyToolHandler {
         let logger = McpLogger::new(&cwd);
 
         logger.log("INFO", &format!(
-            "reply_message called: message_len={}, has_token={}, attachments={:?}, cwd={}",
+            "reply_message called: message_len={}, attachments={:?}, cwd={}",
             params.message.len(),
-            !params.token.is_empty(),
             params.attachments,
             cwd.display()
         ));
@@ -96,7 +93,6 @@ impl ReplyToolHandler {
             &logger,
             &cwd,
             &params.message,
-            &params.token,
             params.attachments.as_deref(),
         )
         .await
@@ -131,15 +127,14 @@ async fn handle_reply(
     logger: &McpLogger,
     cwd: &Path,
     message: &str,
-    token: &str,
     attachments: Option<&[String]>,
 ) -> Result<String> {
-    // 1. Decode and validate context
-    let ctx = deserialize_context(token)?;
+    // 1. Load reply context from disk (.jyc/reply-context.json)
+    let ctx = load_reply_context(cwd).await?;
 
     logger.log("INFO", &format!(
-        "Context: channel={}, thread={}, messageDir={}",
-        ctx.channel, ctx.thread_name, ctx.incoming_message_dir
+        "Context loaded: channel={}, thread={}, messageDir={}, model={:?}, mode={:?}",
+        ctx.channel, ctx.thread_name, ctx.incoming_message_dir, ctx.model, ctx.mode
     ));
 
     // 2. Validate message
@@ -271,8 +266,6 @@ async fn handle_reply(
             thread_path,
             &ctx.incoming_message_dir,
             if outbound_attachments.is_empty() { None } else { Some(&outbound_attachments) },
-            ctx.model.as_deref(),
-            ctx.mode.as_deref(),
         )
         .await?;
     outbound.disconnect().await?;
@@ -296,6 +289,10 @@ async fn handle_reply(
     .await
     .ok();
     logger.log("INFO", "Signal file written");
+
+    // 11. Cleanup reply context file (no longer needed after send)
+    cleanup_reply_context(thread_path).await;
+    logger.log("INFO", "Reply context cleaned up");
 
     // 11. Return success
     let mut result = format!(

@@ -2,6 +2,28 @@
 
 All notable changes to JYC will be documented in this file.
 
+## [0.0.8] - 2026-03-28
+
+### Changed
+
+**Disk-based reply context (replaces REPLY_TOKEN)**
+- Reply context saved to `.jyc/reply-context.json` per-thread before AI prompt
+- MCP reply tool reads context from disk (cwd) instead of decoding a base64 token
+- AI never sees or touches the context — zero corruption risk
+- `token` parameter removed from `reply_message` tool schema — only `message` and `attachments`
+- REPLY_TOKEN line removed from AI prompt entirely
+- Token-related system prompt instructions removed (no more "pass as-is" warnings)
+- Context includes `model` and `mode` fields for future footer use
+- Context file deleted by reply tool after successful send (cleanup)
+
+### Removed
+- `serialize_context()` and `deserialize_context()` functions (base64 token approach)
+- `REPLY_TOKEN=` from prompt text
+- Token integrity checks (backtick detection, nonce validation) — no longer needed
+- `build_footer()` function and model/mode from `build_full_reply_text()`
+- `model` and `mode` fields from `AgentResult` (agent is channel-agnostic)
+- `model` and `mode` parameters from `EmailOutboundAdapter::send_reply()`
+
 ## [0.0.7] - 2026-03-27
 
 ### Changed

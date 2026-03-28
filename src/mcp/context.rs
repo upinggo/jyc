@@ -1,26 +1,23 @@
 use anyhow::{bail, Result};
-use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
-/// Minimal reply context token — channel-agnostic routing + file location.
+const REPLY_CONTEXT_FILENAME: &str = "reply-context.json";
+
+/// Reply context — saved to disk per-thread, read by the MCP reply tool.
 ///
-/// The token is intentionally minimal to reduce corruption risk from AI models.
-/// All message metadata (sender, recipient, topic, threading headers) is read
-/// from the stored received.md file by the reply tool — NOT from the token.
+/// Written by OpenCodeService before sending the prompt.
+/// Read by reply_tool from cwd (= thread directory).
+/// Deleted by reply_tool after successful send.
 ///
-/// Token fields:
-/// - `channel`: config channel name (routing key for outbound adapter)
-/// - `threadName`: thread directory name (for logging)
-/// - `incomingMessageDir`: message subdirectory name (to find received.md)
-/// - `uid`: channel-specific message ID
-/// - `model`: AI model used (optional, for footer display)
-/// - `mode`: AI mode used (optional, for footer display)
-/// - `_nonce`: integrity nonce
+/// This replaces the old REPLY_TOKEN approach where context was passed
+/// through the AI as a base64 token (prone to corruption by AI models).
+/// Now the context lives on disk — the AI never sees or touches it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplyContext {
     /// Config channel name (e.g., "jiny283") — routing key
     pub channel: String,
-    /// Thread directory name (e.g., "weather") — for logging
+    /// Thread directory name (e.g., "weather")
     #[serde(rename = "threadName")]
     pub thread_name: String,
     /// Message subdirectory under messages/ (e.g., "2026-03-27_10-00-00")
@@ -28,66 +25,48 @@ pub struct ReplyContext {
     pub incoming_message_dir: String,
     /// Channel-specific message ID (e.g., IMAP UID)
     pub uid: String,
-    /// AI model used (e.g., "claude-sonnet-4-20250514") — optional
+    /// AI model used (e.g., "ark/deepseek-v3.2")
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// AI mode used (e.g., "build", "plan") — optional
+    /// AI mode used (e.g., "build", "plan")
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
-    /// Integrity nonce
-    #[serde(rename = "_nonce")]
-    pub nonce: Option<String>,
+    /// When this context was created
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
 }
 
-/// Serialize a reply context token (struct → JSON → base64).
+/// Save reply context to `.jyc/reply-context.json` in the thread directory.
 ///
-/// Uses standard base64 (with padding).
-pub fn serialize_context(
-    channel: &str,
-    thread_name: &str,
-    incoming_message_dir: &str,
-    uid: &str,
-    model: Option<&str>,
-    mode: Option<&str>,
-) -> String {
-    let nonce = format!(
-        "{}-{}",
-        chrono::Utc::now().timestamp_millis(),
-        &uuid::Uuid::new_v4().to_string()[..8]
+/// Called by OpenCodeService before sending the prompt.
+pub async fn save_reply_context(thread_path: &Path, ctx: &ReplyContext) -> Result<()> {
+    let jyc_dir = thread_path.join(".jyc");
+    tokio::fs::create_dir_all(&jyc_dir).await?;
+
+    let path = jyc_dir.join(REPLY_CONTEXT_FILENAME);
+    let content = serde_json::to_string_pretty(ctx)?;
+    tokio::fs::write(&path, content).await?;
+
+    tracing::debug!(
+        channel = %ctx.channel,
+        message_dir = %ctx.incoming_message_dir,
+        "Reply context saved to disk"
     );
-
-    let context = ReplyContext {
-        channel: channel.to_string(),
-        thread_name: thread_name.to_string(),
-        incoming_message_dir: incoming_message_dir.to_string(),
-        uid: uid.to_string(),
-        model: model.map(|m| m.to_string()),
-        mode: mode.map(|m| m.to_string()),
-        nonce: Some(nonce),
-    };
-
-    let json = serde_json::to_string(&context).unwrap_or_default();
-    base64::engine::general_purpose::STANDARD.encode(json)
+    Ok(())
 }
 
-/// Deserialize and validate a reply context token.
+/// Load reply context from `.jyc/reply-context.json` in the given directory.
 ///
-/// base64 → JSON → ReplyContext with integrity checks.
-pub fn deserialize_context(encoded: &str) -> Result<ReplyContext> {
-    // Try standard base64 first, then URL-safe (backward compat)
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded))
-        .map_err(|e| anyhow::anyhow!("invalid base64 token: {e}"))?;
+/// Called by the MCP reply tool from its cwd (= thread directory).
+pub async fn load_reply_context(thread_path: &Path) -> Result<ReplyContext> {
+    let path = thread_path.join(".jyc").join(REPLY_CONTEXT_FILENAME);
 
-    let json =
-        String::from_utf8(bytes).map_err(|e| anyhow::anyhow!("invalid UTF-8 in token: {e}"))?;
-
-    // Check for tampering indicators
-    if json.contains('`') || json.contains("\\n") || json.contains("\\\"") {
-        bail!("token appears modified — DO NOT decode or modify the token");
+    if !path.exists() {
+        bail!("reply-context.json not found in {}", thread_path.display());
     }
 
-    let ctx: ReplyContext =
-        serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("invalid JSON in token: {e}"))?;
+    let content = tokio::fs::read_to_string(&path).await?;
+    let ctx: ReplyContext = serde_json::from_str(&content)?;
 
     // Validate required fields
     if ctx.channel.is_empty() {
@@ -100,98 +79,79 @@ pub fn deserialize_context(encoded: &str) -> Result<ReplyContext> {
     Ok(ctx)
 }
 
+/// Delete the reply context file after successful send (cleanup).
+///
+/// Called by the MCP reply tool after the reply is sent.
+pub async fn cleanup_reply_context(thread_path: &Path) {
+    let path = thread_path.join(".jyc").join(REPLY_CONTEXT_FILENAME);
+    if path.exists() {
+        tokio::fs::remove_file(&path).await.ok();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_serialize_deserialize_round_trip() {
-        let token = serialize_context(
-            "jiny283",
-            "weather",
-            "2026-03-27_10-00-00",
-            "42",
-            None,
-            None,
-        );
-        let ctx = deserialize_context(&token).unwrap();
-        assert_eq!(ctx.channel, "jiny283");
-        assert_eq!(ctx.thread_name, "weather");
-        assert_eq!(ctx.incoming_message_dir, "2026-03-27_10-00-00");
-        assert_eq!(ctx.uid, "42");
-        assert!(ctx.nonce.is_some());
-        assert!(ctx.model.is_none());
-        assert!(ctx.mode.is_none());
+    #[tokio::test]
+    async fn test_save_and_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ReplyContext {
+            channel: "jiny283".to_string(),
+            thread_name: "weather".to_string(),
+            incoming_message_dir: "2026-03-27_10-00-00".to_string(),
+            uid: "42".to_string(),
+            model: Some("ark/deepseek-v3.2".to_string()),
+            mode: Some("build".to_string()),
+            created_at: "2026-03-27T10:00:00Z".to_string(),
+        };
+
+        save_reply_context(tmp.path(), &ctx).await.unwrap();
+        let loaded = load_reply_context(tmp.path()).await.unwrap();
+
+        assert_eq!(loaded.channel, "jiny283");
+        assert_eq!(loaded.thread_name, "weather");
+        assert_eq!(loaded.incoming_message_dir, "2026-03-27_10-00-00");
+        assert_eq!(loaded.uid, "42");
+        assert_eq!(loaded.model.as_deref(), Some("ark/deepseek-v3.2"));
+        assert_eq!(loaded.mode.as_deref(), Some("build"));
     }
 
-    #[test]
-    fn test_deserialize_missing_channel() {
-        let json = r#"{"channel":"","threadName":"t","incomingMessageDir":"d","uid":"1"}"#;
-        let token = base64::engine::general_purpose::STANDARD.encode(json);
-        assert!(deserialize_context(&token).is_err());
+    #[tokio::test]
+    async fn test_load_missing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(load_reply_context(tmp.path()).await.is_err());
     }
 
-    #[test]
-    fn test_deserialize_missing_message_dir() {
-        let json = r#"{"channel":"ch","threadName":"t","incomingMessageDir":"","uid":"1"}"#;
-        let token = base64::engine::general_purpose::STANDARD.encode(json);
-        assert!(deserialize_context(&token).is_err());
+    #[tokio::test]
+    async fn test_cleanup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ReplyContext {
+            channel: "ch".to_string(),
+            thread_name: "t".to_string(),
+            incoming_message_dir: "d".to_string(),
+            uid: "1".to_string(),
+            model: None,
+            mode: None,
+            created_at: "now".to_string(),
+        };
+
+        save_reply_context(tmp.path(), &ctx).await.unwrap();
+        assert!(tmp.path().join(".jyc/reply-context.json").exists());
+
+        cleanup_reply_context(tmp.path()).await;
+        assert!(!tmp.path().join(".jyc/reply-context.json").exists());
     }
 
-    #[test]
-    fn test_deserialize_invalid_base64() {
-        assert!(deserialize_context("not-valid!!!").is_err());
-    }
-
-    #[test]
-    fn test_deserialize_tampered_backticks() {
-        let json = r#"`{"channel":"ch"}`"#;
-        let token = base64::engine::general_purpose::STANDARD.encode(json);
-        assert!(deserialize_context(&token).is_err());
-    }
-
-    #[test]
-    fn test_minimal_token_is_short() {
-        let token = serialize_context(
-            "jiny283",
-            "weather",
-            "2026-03-27_10-00-00",
-            "42",
-            None,
-            None,
-        );
-        // Minimal token should be well under 300 chars (includes optional fields)
-        assert!(token.len() < 300, "token too long: {} chars", token.len());
-    }
-
-    #[test]
-    fn test_serialize_with_model_and_mode() {
-        let token = serialize_context(
-            "jiny283",
-            "weather",
-            "2026-03-27_10-00-00",
-            "42",
-            Some("claude-sonnet-4-20250514"),
-            Some("build"),
-        );
-        let ctx = deserialize_context(&token).unwrap();
-        assert_eq!(ctx.channel, "jiny283");
-        assert_eq!(ctx.model, Some("claude-sonnet-4-20250514".to_string()));
-        assert_eq!(ctx.mode, Some("build".to_string()));
-    }
-
-    #[test]
-    fn test_backward_compat_with_old_token() {
-        // Old token format without model/mode fields should still work
-        let json = r#"{"channel":"jiny283","threadName":"weather","incomingMessageDir":"2026-03-27_10-00-00","uid":"42","_nonce":"123456789-abc12345"}"#;
-        let token = base64::engine::general_purpose::STANDARD.encode(json);
-        let ctx = deserialize_context(&token).unwrap();
-        assert_eq!(ctx.channel, "jiny283");
-        assert_eq!(ctx.thread_name, "weather");
-        assert_eq!(ctx.incoming_message_dir, "2026-03-27_10-00-00");
-        assert_eq!(ctx.uid, "42");
-        // New fields should be None when not present
-        assert!(ctx.model.is_none());
-        assert!(ctx.mode.is_none());
+    #[tokio::test]
+    async fn test_load_missing_channel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jyc_dir = tmp.path().join(".jyc");
+        tokio::fs::create_dir_all(&jyc_dir).await.unwrap();
+        tokio::fs::write(
+            jyc_dir.join("reply-context.json"),
+            r#"{"channel":"","threadName":"t","incomingMessageDir":"d","uid":"1","createdAt":"now"}"#,
+        ).await.unwrap();
+        assert!(load_reply_context(tmp.path()).await.is_err());
     }
 }

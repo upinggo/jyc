@@ -109,7 +109,7 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 │  3. Get or create session (verify via API, persist .jyc/opencode-session.json)    │
 │  4. Clean up stale signal file                                           │
 │  5. Build system prompt (config + directory rules + system.md)            │
-│  6. Build user prompt (stripped body + REPLY_TOKEN)                       │
+│  6. Build user prompt (stripped body )                       │
 │  7. Check mode override (plan/build)                                     │
 │  8. Send prompt via SSE streaming (activity timeout, tool detection)      │
 │  9. Handle result → return GenerateReplyResult                           │
@@ -123,7 +123,7 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 │  │  Binary: jyc mcp-reply-tool             │                            │
 │  │  Transport: stdio (rmcp)                │                            │
 │  │                                         │                            │
-│  │  1. Decode REPLY_TOKEN (routing only)   │                            │
+│  │  1. Decode reply-context.json (routing only)   │                            │
 │  │  2. Read received.md → full body        │                            │
 │  │  3. Build full reply (AI + quoted hst)  │                            │
 │  │  4. Instantiate OutboundAdapter         │                            │
@@ -184,12 +184,12 @@ Each component has a single, clear responsibility. Data flows through the system
 **PromptBuilder**
 - Builds the user prompt from the incoming message
 - Strips quoted history from body and truncates to fit AI token budget
-- Appends a minimal `REPLY_TOKEN=` (5-field base64 routing token — channel, threadName, messageDir, uid, nonce)
+- Note: Reply context is saved to disk (.jyc/reply-context.json), NOT embedded in the prompt
 - Does NOT include conversation history in the prompt (OpenCode session memory handles multi-turn context)
 
 **Reply Tool** (MCP `reply_message`)
 - Orchestrator for the reply flow
-- Decodes the minimal `REPLY_TOKEN=` to get routing info (channel name, message directory)
+- Decodes the minimal `reply-context.json=` to get routing info (channel name, message directory)
 - Reads ALL message metadata (sender, recipient, topic, threading headers) from `received.md` frontmatter — NOT from the token
 - Builds the full reply in markdown: AI reply text + quoted history (`prepare_body_for_quoting`)
 - Delegates sending to OutboundAdapter (passes the full markdown reply)
@@ -211,10 +211,10 @@ Each component has a single, clear responsibility. Data flows through the system
 - Stops and cleans up when processing completes
 - Uses channel-specific outbound adapter to send progress emails via `send_progress_update()`
 
-**REPLY_TOKEN** (minimal base64 routing token)
+**Reply context** saved to `.jyc/reply-context.json` — the AI never sees it
 - Only 5 fields: `channel`, `threadName`, `incomingMessageDir`, `uid`, `_nonce`
 - Channel-agnostic — no email-specific fields (no sender, recipient, topic, threading headers)
-- The AI passes it through unchanged as `REPLY_TOKEN=<base64>` (not XML tags)
+- The AI passes it through unchanged as `reply-context.json=<base64>` (not XML tags)
 - The Reply Tool decodes it for routing only — reads all message metadata from `received.md` frontmatter
 - Short token (~120 bytes) reduces AI corruption risk compared to the old 12-field token (~400 bytes)
 
@@ -224,9 +224,9 @@ Each component has a single, clear responsibility. Data flows through the system
 Email arrives
   → InboundAdapter: parse, clean subject + body → clean InboundMessage
     → MessageStorage: store as-is → received.md (with full frontmatter metadata)
-      → PromptBuilder: strip + truncate body → prompt + REPLY_TOKEN=<routing token>
+      → PromptBuilder: strip + truncate body → prompt =<routing token>
         → AI: receives stripped body + minimal routing token
-          → Reply Tool: decode REPLY_TOKEN → read received.md for all metadata
+          → Reply Tool: decode reply-context.json → read received.md for all metadata
             → build_full_reply_text(): AI reply + quoted history
             → SmtpClient: markdown→HTML, add headers + attachments, send via SMTP
             → MessageStorage: store full reply → reply.md (= what was sent)
@@ -267,7 +267,7 @@ Email arrives
    │           │             │             │             │             │             │             │
    │           │             │        strip_quoted_history│             │             │             │
    │           │             │        + truncate body     │             │             │             │
-   │           │             │        + append REPLY_TOKEN=│             │             │             │
+   │           │             │        + append reply-context.json=│             │             │             │
    │           │             │          (minimal 5-field  │             │             │             │
    │           │             │           routing token)   │             │             │             │
    │           │             │             │             │             │             │             │
@@ -313,7 +313,7 @@ Email arrives
 - **PromptBuilder** strips quoted history from body for the AI prompt; does NOT include conversation history (OpenCode session memory handles that)
 - **`build_full_reply_text()`** is the single shared function for assembling the full reply (AI text + quoted history) — called by `EmailOutboundAdapter` and MCP reply tool, NOT by agents or ThreadManager
 - **SmtpClient** is a dumb transport: markdown→HTML + headers + attachments + send
-- **REPLY_TOKEN** is a minimal routing token (5 fields) — all message metadata comes from `received.md` frontmatter
+- **reply-context.json** is a minimal routing token (5 fields) — all message metadata comes from `received.md` frontmatter
 - **reply.md** = exactly what the recipient receives (minus HTML formatting)
 
 ## Core Types & Traits
@@ -910,7 +910,7 @@ Each agent mode implements this trait. Adding a new agent requires only implemen
 - Server lifecycle: ensure OpenCode server is running, health check, auto-restart
 - Thread setup: write per-thread `opencode.json` with model, MCP tools, permissions
 - Session management: reuse/create sessions, staleness detection
-- Prompt building: system prompt + user prompt + REPLY_TOKEN
+- Prompt building: system prompt + user prompt 
 - SSE streaming: activity timeout, tool detection, progress logging
 - Error recovery: ContextOverflow → new session, stale session → retry
 - Returns raw AI text — does NOT format, send, or store replies
@@ -1108,7 +1108,7 @@ JYC uses the following subset of the OpenCode server API:
 │  3. Get or create session (.jyc/opencode-session.json)
 │  4. Clean up stale signal file
 │  5. Build system prompt (config + directory boundaries + system.md)
-│  6. Build user prompt (stripped body + REPLY_TOKEN)
+│  6. Build user prompt (stripped body )
 │  7. Check mode override (plan/build from .jyc/mode-override)
 │         ↓
 │  prompt_with_sse() (SSE streaming):
@@ -1127,7 +1127,7 @@ JYC uses the following subset of the OpenCode server API:
 │  OpenCode calls reply_message MCP tool
 │         ↓
 │  MCP Tool (jyc mcp-reply-tool subprocess):
-│    1. Decode REPLY_TOKEN → get channel name + message directory
+│    1. Decode reply-context.json → get channel name + message directory
 │    2. Load config from JYC_ROOT/config.toml
 │    3. Instantiate OutboundAdapter for context.channel
 │    4. Read received.md for full body
@@ -1278,7 +1278,7 @@ older received.md  (user's earlier message)
 
 **Prompt echo stripping:** When the AI generates a fallback text response (because the MCP tool failed), it may echo parts of the prompt. `extract_text_from_parts()` strips these markers before building the full reply:
 - `## Incoming Message`
-- `REPLY_TOKEN=`
+- `reply-context.json=`
 - `## Conversation history`
 
 ### Signal File (`.jyc/reply-sent.flag`)
@@ -1325,9 +1325,11 @@ jyc binary
 
 The reply tool shares types with the main binary (same Rust crate), eliminating the type drift risk of the two-binary TypeScript approach.
 
-### Reply Token (Minimal Routing Token)
+### Reply Context File (Disk-Based)
 
-The reply token (`REPLY_TOKEN=<base64>`) is intentionally minimal to reduce AI corruption risk. All message metadata is read from `received.md` frontmatter by the reply tool.
+The reply context is saved to `.jyc/reply-context.json` per-thread before the AI prompt is sent. The MCP reply tool reads it from disk — the AI never sees or touches the context.
+
+This replaces the old `reply-context.json=<base64>` approach where context was passed through the AI in the prompt text (prone to corruption by AI models).
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1336,35 +1338,45 @@ pub struct ReplyContext {
     pub thread_name: String,          // Thread directory name
     pub incoming_message_dir: String, // Message subdirectory (find received.md)
     pub uid: String,                  // Channel-specific message ID
-    pub nonce: Option<String>,        // Integrity nonce
+    pub model: Option<String>,        // AI model used (e.g., "ark/deepseek-v3.2")
+    pub mode: Option<String>,         // AI mode used (e.g., "build", "plan")
+    pub created_at: String,           // When context was created
 }
 
-/// Serialize: struct → JSON → standard base64
-pub fn serialize_context(channel, thread_name, incoming_message_dir, uid) -> String
+/// Save to .jyc/reply-context.json (called by OpenCodeService before prompt)
+pub async fn save_reply_context(thread_path: &Path, ctx: &ReplyContext) -> Result<()>
 
-/// Deserialize: base64 → JSON → struct + integrity checks
-pub fn deserialize_context(encoded: &str) -> Result<ReplyContext>
+/// Load from .jyc/reply-context.json (called by MCP reply tool from cwd)
+pub async fn load_reply_context(thread_path: &Path) -> Result<ReplyContext>
+
+/// Delete after successful send (cleanup)
+pub async fn cleanup_reply_context(thread_path: &Path)
 ```
 
-**Why minimal?** AI models sometimes modify the token despite instructions not to. With the old 12-field token (~400 bytes), corrupted fields like `recipient` caused bounced emails. The minimal 5-field token (~120 bytes) contains only short ASCII routing identifiers — low corruption risk. All sensitive data (sender address, threading headers) comes from `received.md`.
+**Lifecycle:**
+1. `OpenCodeService` saves `.jyc/reply-context.json` before sending the prompt
+2. AI calls `reply_message(message, attachments)` — no token parameter
+3. MCP reply tool reads `.jyc/reply-context.json` from cwd (= thread directory)
+4. After successful send, reply tool deletes the context file (cleanup)
+5. If AI doesn't use the tool (fallback path), the file stays on disk (overwritten by next message)
 
-**Token format in prompt:** `REPLY_TOKEN=<base64>` (not XML tags — avoids triggering AI's "parse structured data" instinct)
+**Why disk-based?** Zero corruption risk — the context never passes through the AI. The AI only receives the prompt text (incoming message body). All routing and metadata is on disk.
 
 ### MCP Tool: `reply_message`
 
 ```
 MCP Server (rmcp, stdio transport, cwd = thread dir):
-  Tool schema: message (string), token (string), attachments (string[] optional)
+  Tool schema: message (string), attachments (string[] optional)
 
-  1. Decode REPLY_TOKEN → get channel name + message directory
+  1. Load .jyc/reply-context.json from cwd → get channel, messageDir
   2. Load config from JYC_ROOT/config.toml
   3. Read received.md frontmatter → sender_address, topic, external_id, thread_refs
-     (authoritative source — NOT from token)
   4. Validate attachments (exclude .opencode/, .jyc/)
   5. Build full reply: AI reply text + build_full_reply_text() (quoted history)
   6. Instantiate OutboundAdapter for channel → send reply with attachments
   7. MessageStorage::store_reply() → reply.md
   8. Write .jyc/reply-sent.flag (signal file)
+  9. Delete .jyc/reply-context.json (cleanup)
   9. Return success message
 ```
 
@@ -1744,7 +1756,7 @@ jyc/
 │   │   │   ├── service.rs            # OpenCodeService implements AgentService
 │   │   │   ├── client.rs             # OpenCode HTTP + SSE client
 │   │   │   ├── session.rs            # Session + opencode.json + signal file management
-│   │   │   ├── prompt_builder.rs     # Prompt construction + REPLY_TOKEN
+│   │   │   ├── prompt_builder.rs     # Prompt construction 
 │   │   │   └── types.rs              # API request/response + SSE event types
 │   │   ├── imap/
 │   │   │   ├── mod.rs
@@ -2081,7 +2093,7 @@ Configurable per pattern via `attachments` in the pattern config.
 | **Inbound** | `EmailInboundAdapter` | No | Yes | Clean at boundary |
 | **Storage** | `MessageStorage::store()` | No | No | Canonical record (full frontmatter) |
 | **AI Prompt Body** | `PromptBuilder::build_prompt()` | Yes | No | Incoming message for AI |
-| **REPLY_TOKEN** | `serialize_context()` | N/A | N/A | Minimal routing only (5 fields) |
+| **Reply context** | `.jyc/reply-context.json` | N/A | N/A | Saved to disk before prompt, read by reply tool |
 | **Reply Tool** | `mcp/reply_tool.rs` | No | No | Reads received.md frontmatter for all metadata |
 | **Outbound** | `SmtpClient` | No | No | Dumb transport + attachments |
 

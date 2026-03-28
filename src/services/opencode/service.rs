@@ -89,7 +89,20 @@ impl OpenCodeService {
 
         let mode_label = agent_mode.as_deref().unwrap_or("build").to_string();
 
-        // 6. Build prompts with model and mode
+        // 6. Save reply context to disk for the MCP reply tool
+        // The reply tool reads from .jyc/reply-context.json instead of a token in the prompt
+        let thread_name_str = thread_name.to_string();
+        crate::mcp::context::save_reply_context(thread_path, &crate::mcp::context::ReplyContext {
+            channel: message.channel.clone(),
+            thread_name: thread_name_str,
+            incoming_message_dir: message_dir.to_string(),
+            uid: message.channel_uid.clone(),
+            model: model.clone(),
+            mode: Some(mode_label.clone()),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }).await?;
+
+        // 7. Build prompts
         let system_prompt = prompt_builder::build_system_prompt(
             thread_path,
             self.agent_config.opencode.as_ref().and_then(|o| o.system_prompt.as_deref()),
@@ -99,8 +112,6 @@ impl OpenCodeService {
             message,
             thread_path,
             message_dir,
-            model.as_deref(),
-            mode_override.as_deref(),
         ).await?;
 
         // Model and mode are passed per-prompt — no session restart needed for switches
@@ -296,8 +307,6 @@ impl AgentService for OpenCodeService {
         Ok(AgentResult {
             reply_sent_by_tool: result.reply_sent_by_tool,
             reply_text: result.reply_text,
-            model: result.model_id,
-            mode: result.mode,
         })
     }
 }
@@ -331,6 +340,5 @@ fn extract_text_from_parts(parts: &[ResponsePart]) -> Option<String> {
 fn is_prompt_echo(text: &str) -> bool {
     let trimmed = text.trim();
     trimmed.starts_with("## Incoming Message")
-        || trimmed.starts_with("REPLY_TOKEN=")
         || trimmed.starts_with("## Conversation history")
 }

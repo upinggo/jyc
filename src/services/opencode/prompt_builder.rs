@@ -3,7 +3,6 @@ use std::path::Path;
 
 use crate::channels::types::InboundMessage;
 use crate::core::email_parser;
-use crate::mcp::context;
 use crate::utils::constants::MAX_BODY_IN_PROMPT;
 
 /// Build the system prompt for OpenCode.
@@ -38,8 +37,6 @@ After you have replied to the current message, STOP. Do not do anything else.
 
 ## Reply Instructions
 When replying to a message, use the jiny_reply_reply_message tool:
-- `token`: Pass the value after REPLY_TOKEN= exactly as-is (do not decode or modify it)
-**WARN: DO NOT decode, modify, re-encode, or add any formatting (backticks, quotes, spaces, newlines) to the token. Any change—even a single character—will break the reply.**
 - `message`: Your reply text
 - `attachments`: Optional filenames to attach from the working directory
 After a successful reply, STOP immediately. Do NOT call any other tools or perform further actions.
@@ -76,13 +73,11 @@ CRITICAL: Always use jiny_reply_reply_message tool.
 ///
 /// Includes:
 /// - Incoming message body (stripped, truncated)
-/// - Reply token (minimal base64 routing token)
+/// Note: Reply context is saved to disk (.jyc/reply-context.json), NOT embedded in prompt.
 pub async fn build_prompt(
     message: &InboundMessage,
     thread_path: &Path,
     message_dir: &str,
-    model: Option<&str>,
-    mode: Option<&str>,
 ) -> Result<String> {
     let mut prompt = String::new();
 
@@ -107,21 +102,6 @@ pub async fn build_prompt(
     prompt.push_str("**Body:**\n");
     prompt.push_str(&truncated);
     prompt.push('\n');
-
-    // Reply context token (minimal — routing + file location only)
-    let thread_name = thread_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let context_token = context::serialize_context(
-        &message.channel,
-        &thread_name,
-        message_dir,
-        &message.channel_uid,
-        model,
-        mode,
-    );
-    prompt.push_str(&format!("\nREPLY_TOKEN={context_token}\n"));
 
     Ok(prompt)
 }
@@ -182,7 +162,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let msg = test_message();
 
-        let prompt = build_prompt(&msg, tmp.path(), "2026-03-27_10-00-00", None, None)
+        let prompt = build_prompt(&msg, tmp.path(), "2026-03-27_10-00-00")
             .await
             .unwrap();
 
@@ -190,15 +170,7 @@ mod tests {
         assert!(prompt.contains("John"));
         assert!(prompt.contains("john@example.com"));
         assert!(prompt.contains("Hello, help me."));
-        assert!(prompt.contains("REPLY_TOKEN="));
-
-        // Token should be short (minimal fields + optional model/mode)
-        let start = prompt.find("REPLY_TOKEN=").unwrap() + 12;
-        let end = prompt[start..]
-            .find('\n')
-            .map(|i| start + i)
-            .unwrap_or(prompt.len());
-        let token = &prompt[start..end];
-        assert!(token.len() < 300, "token too long: {} chars", token.len());
+        // No REPLY_TOKEN in prompt — context is on disk
+        assert!(!prompt.contains("REPLY_TOKEN="));
     }
 }

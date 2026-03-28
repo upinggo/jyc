@@ -11,14 +11,9 @@ use crate::channels::types::InboundMessage;
 #[derive(Debug)]
 pub struct AgentResult {
     /// Whether reply was already sent by MCP tool
-    /// (the tool owns of full reply lifecycle: format + send + store)
     pub reply_sent_by_tool: bool,
     /// Raw AI response text (for outbound adapter to format + send + store)
     pub reply_text: Option<String>,
-    /// Model used for generating the response
-    pub model: Option<String>,
-    /// Mode used for generating the response
-    pub mode: Option<String>,
 }
 
 /// Trait for agent services that generate AI responses.

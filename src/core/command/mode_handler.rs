@@ -1,6 +1,5 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use std::path::Path;
 
 use super::handler::{CommandContext, CommandHandler, CommandResult};
 
@@ -24,17 +23,14 @@ impl CommandHandler for PlanCommandHandler {
         let override_path = jyc_dir.join("mode-override");
         tokio::fs::write(&override_path, "plan").await?;
 
-        // Delete session to force new one with plan agent
-        let session_path = jyc_dir.join("opencode-session.json");
-        if session_path.exists() {
-            tokio::fs::remove_file(&session_path).await?;
-        }
+        // Mode is passed per-prompt (PromptRequest.agent), not per-session.
+        // Session is preserved — AI keeps conversation memory.
 
         Ok(CommandResult {
             success: true,
             message: "/plan: switched to plan mode (read-only)".into(),
             error: None,
-            requires_restart: true,
+            requires_restart: false,
         })
     }
 }
@@ -60,17 +56,14 @@ impl CommandHandler for BuildCommandHandler {
             tokio::fs::remove_file(&override_path).await?;
         }
 
-        // Delete session to force new one
-        let session_path = jyc_dir.join("opencode-session.json");
-        if session_path.exists() {
-            tokio::fs::remove_file(&session_path).await?;
-        }
+        // Mode is passed per-prompt (PromptRequest.agent), not per-session.
+        // Session is preserved — AI keeps conversation memory.
 
         Ok(CommandResult {
             success: true,
             message: "/build: switched to build mode (full execution)".into(),
             error: None,
-            requires_restart: true,
+            requires_restart: false,
         })
     }
 }
@@ -78,6 +71,7 @@ impl CommandHandler for BuildCommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::sync::Arc;
 
     fn test_context(thread_path: &Path) -> CommandContext {
@@ -119,7 +113,7 @@ mode = "opencode"
 
         let result = handler.execute(ctx).await.unwrap();
         assert!(result.success);
-        assert!(result.requires_restart);
+        assert!(!result.requires_restart);
 
         let content = tokio::fs::read_to_string(tmp.path().join(".jyc/mode-override"))
             .await
@@ -142,5 +136,22 @@ mode = "opencode"
         let result = handler.execute(ctx).await.unwrap();
         assert!(result.success);
         assert!(!jyc_dir.join("mode-override").exists());
+    }
+
+    #[tokio::test]
+    async fn test_plan_preserves_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jyc_dir = tmp.path().join(".jyc");
+        tokio::fs::create_dir_all(&jyc_dir).await.unwrap();
+        tokio::fs::write(jyc_dir.join("opencode-session.json"), r#"{"sessionId":"test"}"#)
+            .await
+            .unwrap();
+
+        let handler = PlanCommandHandler;
+        let ctx = test_context(tmp.path());
+        handler.execute(ctx).await.unwrap();
+
+        // Session file should still exist
+        assert!(jyc_dir.join("opencode-session.json").exists());
     }
 }

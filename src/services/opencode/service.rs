@@ -59,15 +59,12 @@ impl OpenCodeService {
 
         if config_changed {
             tracing::info!("opencode.json updated");
-            // Don't delete session — server picks up config changes automatically.
-            // Sessions are only deleted by:
-            // - /model command (model_handler.rs)
-            // - /plan, /build commands (mode_handler.rs)
-            // - ContextOverflow recovery (handle_sse_result)
-            // - Stale session detection (handle_sse_result)
         }
 
-        // 3. Get or create session
+        // 3. Get or create session (reuse across messages, mode switches, model switches)
+        // Sessions are only deleted for error recovery:
+        // - ContextOverflow (handle_sse_result)
+        // - Stale session detection (handle_sse_result)
         let session_id = session::get_or_create_session(&client, thread_path).await?;
 
         // 4. Clean up stale signal file
@@ -85,7 +82,16 @@ impl OpenCodeService {
             message_dir,
         ).await?;
 
-        // 6. Mode override (plan/build)
+        // 6. Read model (from override or config) and mode (from override)
+        let model = session::read_model_override(thread_path)
+            .await
+            .or_else(|| {
+                self.agent_config
+                    .opencode
+                    .as_ref()
+                    .and_then(|o| o.model.clone())
+            });
+
         let mode_override = session::read_mode_override(thread_path).await;
         let agent_mode = if mode_override.as_deref() == Some("plan") {
             Some("plan".to_string())
@@ -95,8 +101,10 @@ impl OpenCodeService {
 
         let mode_label = agent_mode.as_deref().unwrap_or("build").to_string();
 
+        // Model and mode are passed per-prompt — no session restart needed for switches
         let request = PromptRequest {
             system: system_prompt,
+            model,
             agent: agent_mode,
             parts: vec![PromptPart::Text { text: user_prompt }],
         };
@@ -291,26 +299,24 @@ struct GenerateReplyResult {
 }
 
 /// Extract text content from accumulated response parts.
+/// Filters out prompt echo parts (per-part, not combined).
 fn extract_text_from_parts(parts: &[ResponsePart]) -> Option<String> {
     let text: String = parts
         .iter()
         .filter(|p| p.part_type == "text")
         .filter_map(|p| p.text.as_deref())
+        .filter(|t| !t.is_empty())
+        .filter(|t| !is_prompt_echo(t))
         .collect::<Vec<_>>()
         .join("\n");
 
-    let cleaned = strip_prompt_echo(&text);
-    if cleaned.trim().is_empty() { None } else { Some(cleaned) }
+    if text.trim().is_empty() { None } else { Some(text.trim().to_string()) }
 }
 
-/// Strip prompt artifacts that the AI may echo back.
-fn strip_prompt_echo(text: &str) -> String {
-    let markers = ["## Incoming Message", "REPLY_TOKEN=", "## Conversation history"];
-    let mut end = text.len();
-    for marker in &markers {
-        if let Some(pos) = text.find(marker) {
-            if pos < end { end = pos; }
-        }
-    }
-    text[..end].trim().to_string()
+/// Check if a text part is a prompt echo (AI repeating the prompt).
+fn is_prompt_echo(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed.starts_with("## Incoming Message")
+        || trimmed.starts_with("REPLY_TOKEN=")
+        || trimmed.starts_with("## Conversation history")
 }

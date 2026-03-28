@@ -14,6 +14,8 @@ pub struct CreateSessionRequest {
 pub struct PromptRequest {
     pub system: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     pub parts: Vec<PromptPart>,
 }

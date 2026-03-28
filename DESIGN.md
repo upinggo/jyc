@@ -993,8 +993,8 @@ JYC uses the following subset of the OpenCode server API:
 
 **Key API conventions:**
 - **Directory context**: Passed via `x-opencode-directory` HTTP header (URL-encoded path), NOT as a query parameter
-- **Model selection**: Configured in per-thread `opencode.json`, NOT passed per-prompt
-- **Prompt body**: `{ system: string, agent?: "plan", parts: [{ type: "text", text: string }] }`
+- **Model selection**: Passed per-prompt via `PromptRequest.model` — session is preserved across model switches
+- **Prompt body**: `{ system: string, model?: string, agent?: "plan", parts: [{ type: "text", text: string }] }`
 - **SSE events**: Event type is in the JSON data field as `{ "type": "...", "properties": {...} }` — NOT in the SSE `event:` field
 
 **SSE event types used:**
@@ -1012,7 +1012,7 @@ JYC uses the following subset of the OpenCode server API:
 - Each thread gets its own `opencode.json` with model settings, MCP tool config, and permissions
 - `permission: { "*": "allow", "question": "deny" }` — headless mode, no interactive terminal
 - Staleness check detects changes → rewrites config → restarts server
-- Model is NOT passed per-prompt — OpenCode reads from project config
+- Model and mode are passed per-prompt via `PromptRequest.model` and `PromptRequest.agent` — no session restart needed for switches
 
 ### OpenCode Server Architecture Diagram
 
@@ -1156,7 +1156,8 @@ JYC uses the following subset of the OpenCode server API:
 
 **Session lifecycle:**
 - Sessions are created on first use per thread and persisted in `.jyc/opencode-session.json`
-- On shutdown (SIGINT/SIGTERM): all session files are deleted to prevent stale sessions on restart
+- Sessions are reused across messages, model switches, mode switches, and container restarts
+- Sessions are only deleted for error recovery (ContextOverflow, stale session detection)
 - On stale session detection: session file is deleted and a new session is created for retry
 
 ### Context Management Strategy

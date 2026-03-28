@@ -2,6 +2,35 @@
 
 All notable changes to JYC will be documented in this file.
 
+## [0.0.7] - 2026-03-27
+
+### Changed
+
+**Session preservation — keep session whenever possible**
+- Model passed per-prompt (`PromptRequest.model`) — `/model` switch no longer deletes session
+- Mode passed per-prompt (`PromptRequest.agent`) — `/plan` and `/build` switches no longer delete session
+- `opencode.json` config changes no longer delete session — server picks up changes per-directory
+- Session survives: model switches, mode switches, config changes, container restarts
+- Session only deleted for error recovery: ContextOverflow and stale session detection
+
+**Prompt echo stripping fix**
+- Changed from join-then-strip to per-part filtering
+- Each text part individually checked for prompt echo markers (`## Incoming Message`, `REPLY_TOKEN=`)
+- Fixes: AI fallback text was lost when prompt echo and actual response were in separate SSE parts
+
+**Logging improvements (from pre-release fixes)**
+- Duplicate `m` field in `ai` span fixed — recorded once when model discovered
+- Duplicate tool logs deduplicated with HashSet per step
+- Tool input shown in logs (`Tool running tool=bash input="cargo build"`)
+- Duplicate "Reply sent by MCP tool" log removed from thread_manager
+- Session reuse: `get_session` now sends `x-opencode-directory` header
+- Debug logging for `config_changed` and `get_session` response status
+
+### Fixed
+- Session reuse across container restarts: `get_session()` was missing `x-opencode-directory` header → server couldn't find session → always created new
+- Fallback reply empty when AI produces prompt echo + actual response in separate text parts
+- `/model` and mode commands unnecessarily deleted session (model/mode are per-prompt, not per-session)
+
 ## [0.0.6] - 2026-03-27
 
 ### Changed

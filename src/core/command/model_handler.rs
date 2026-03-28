@@ -27,11 +27,9 @@ impl CommandHandler for ModelCommandHandler {
         tokio::fs::create_dir_all(&jyc_dir).await?;
 
         let override_path = jyc_dir.join("model-override");
-        let session_path = jyc_dir.join("opencode-session.json");
 
         if context.args.is_empty() {
             // /model with no args — show current model
-            let override_path = jyc_dir.join("model-override");
             let current = if override_path.exists() {
                 let model = tokio::fs::read_to_string(&override_path)
                     .await
@@ -57,32 +55,28 @@ impl CommandHandler for ModelCommandHandler {
             if override_path.exists() {
                 tokio::fs::remove_file(&override_path).await?;
             }
-            // Delete session to force new one with default model
-            if session_path.exists() {
-                tokio::fs::remove_file(&session_path).await?;
-            }
+            // Model is passed per-prompt (PromptRequest.model), not per-session.
+            // Session is preserved — AI keeps conversation memory.
 
             return Ok(CommandResult {
                 success: true,
                 message: "/model: reset to default model from config".into(),
                 error: None,
-                requires_restart: true,
+                requires_restart: false,
             });
         }
 
         // /model <model-id> — write override
         tokio::fs::write(&override_path, arg.trim()).await?;
 
-        // Delete session to force new one with new model
-        if session_path.exists() {
-            tokio::fs::remove_file(&session_path).await?;
-        }
+        // Model is passed per-prompt (PromptRequest.model), not per-session.
+        // Session is preserved — AI keeps conversation memory.
 
         Ok(CommandResult {
             success: true,
             message: format!("/model: switched to {}", arg.trim()),
             error: None,
-            requires_restart: true,
+            requires_restart: false,
         })
     }
 }
@@ -132,7 +126,7 @@ mode = "opencode"
 
         let result = handler.execute(ctx).await.unwrap();
         assert!(result.success);
-        assert!(result.requires_restart);
+        assert!(!result.requires_restart); // model is per-prompt, no restart needed
 
         let override_content =
             tokio::fs::read_to_string(tmp.path().join(".jyc/model-override"))

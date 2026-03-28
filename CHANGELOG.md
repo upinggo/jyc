@@ -30,6 +30,15 @@ All notable changes to JYC will be documented in this file.
 - Session reuse across container restarts: `get_session()` was missing `x-opencode-directory` header → server couldn't find session → always created new
 - Fallback reply empty when AI produces prompt echo + actual response in separate text parts
 - `/model` and mode commands unnecessarily deleted session (model/mode are per-prompt, not per-session)
+- Cleaned up agent task artifacts: removed model/mode from ReplyContext, AgentResult, build_full_reply_text, EmailOutboundAdapter (these are per-prompt concerns, not per-token/per-adapter)
+
+### Added
+
+**Docker: two image variants**
+- `jyc:dev` (target `dev`, ~2GB) — Rust pre-installed for self-bootstrapping, no timeout during cargo install
+- `jyc:latest` (target `production`, ~740MB) — no Rust, production use
+- Both share the same `base` stage (cached) — building one caches the base for the other
+- `docker-compose.yml` defaults to `dev` target, configurable via `JYC_BUILD_TARGET` env var
 
 ## [0.0.6] - 2026-03-27
 

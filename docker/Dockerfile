@@ -32,6 +32,23 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
     && apt-get update && apt-get install -y --no-install-recommends gh && rm -rf /var/lib/apt/lists/*
 
+# Shared setup: s6 service, directories, env, workdir, volumes, entrypoint
+COPY docker/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
+RUN touch /etc/s6-overlay/s6-rc.d/user/contents.d/jyc
+
+RUN mkdir -p /root/.claude/skills /root/.agents/skills \
+    /root/.config/opencode /root/.config/gh \
+    /root/.local/share/opencode \
+    /opt/jyc
+
+ENV CARGO_TARGET_DIR="/tmp/jyc-target"
+
+WORKDIR /opt/jyc
+
+VOLUME ["/opt/jyc", "/root/.config/opencode", "/root/.claude/skills", "/root/.agents/skills", "/root/.netrc", "/root/.config/gh/hosts.yml"]
+
+ENTRYPOINT ["/init"]
+
 # ── Stage 2: Build jyc (changes when source changes) ─────────────────
 FROM rust:bookworm AS builder
 
@@ -42,35 +59,18 @@ COPY config_template.toml ./
 
 RUN cargo build --release
 
-# ── Stage 3: Final image (base tools + jyc binary) ───────────────────
-FROM base
+# ── Stage 3a: Production image (no Rust, ~740MB) ─────────────────────
+# Build: podman build --target production -t jyc:latest -f docker/Dockerfile ..
+FROM base AS production
 
-# Separate target dir for container builds (avoids conflict with host macOS builds
-# when source is bind-mounted). Set globally so cargo picks it up after on-demand install.
-ENV CARGO_TARGET_DIR="/tmp/jyc-target"
-
-# Copy compiled jyc binary (single binary — reply tool is a hidden subcommand)
 COPY --from=builder /build/target/release/jyc /usr/local/bin/jyc
 
-# Note: JYC source for self-bootstrapping is bind-mounted into the thread workspace
-# at runtime (via docker-compose), NOT baked into the image.
-# Note: Rust is NOT pre-installed to keep the image small (~740MB vs ~2GB).
-# The AI installs it on-demand for self-bootstrapping. See system.md.example.
+# ── Stage 3b: Dev image (with Rust for self-bootstrapping, ~2GB) ──────
+# Build: podman build --target dev -t jyc:dev -f docker/Dockerfile ..
+FROM base AS dev
 
-# s6 service definitions
-COPY docker/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
-RUN touch /etc/s6-overlay/s6-rc.d/user/contents.d/jyc
+# Install Rust toolchain (pre-installed — no timeout during self-bootstrapping)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Prepare directories for skills, config, and data mounts
-RUN mkdir -p /root/.claude/skills /root/.agents/skills \
-    /root/.config/opencode /root/.config/gh \
-    /root/.local/share/opencode \
-    /opt/jyc
-
-# Working directory for jyc data (config.toml, channels, workspace)
-WORKDIR /opt/jyc
-
-# Volumes
-VOLUME ["/opt/jyc", "/root/.config/opencode", "/root/.claude/skills", "/root/.agents/skills", "/root/.netrc", "/root/.config/gh/hosts.yml"]
-
-ENTRYPOINT ["/init"]
+COPY --from=builder /build/target/release/jyc /usr/local/bin/jyc

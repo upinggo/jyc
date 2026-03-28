@@ -1416,7 +1416,7 @@ Written by `ensure_thread_opencode_setup()` in each thread directory:
 2. Return `["/path/to/jyc", "mcp-reply-tool"]`
 3. Fallback: check common paths `/usr/local/bin/jyc`, `/usr/bin/jyc`
 
-**Staleness check**: Rewrites `opencode.json` if model, tool path, JYC_ROOT, or `permission.question` changed. When config changes, the OpenCode server is restarted and a new session is created.
+**Staleness check**: Rewrites `opencode.json` if model, tool path, JYC_ROOT, or `permission.question` changed. Session is NOT deleted — model and mode are passed per-prompt.
 
 ## Configuration (TOML)
 

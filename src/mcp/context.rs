@@ -13,8 +13,6 @@ use serde::{Deserialize, Serialize};
 /// - `threadName`: thread directory name (for logging)
 /// - `incomingMessageDir`: message subdirectory name (to find received.md)
 /// - `uid`: channel-specific message ID
-/// - `model`: AI model used (optional, for footer display)
-/// - `mode`: AI mode used (optional, for footer display)
 /// - `_nonce`: integrity nonce
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplyContext {
@@ -28,10 +26,6 @@ pub struct ReplyContext {
     pub incoming_message_dir: String,
     /// Channel-specific message ID (e.g., IMAP UID)
     pub uid: String,
-    /// AI model used (e.g., "claude-sonnet-4-20250514") — optional
-    pub model: Option<String>,
-    /// AI mode used (e.g., "build", "plan") — optional
-    pub mode: Option<String>,
     /// Integrity nonce
     #[serde(rename = "_nonce")]
     pub nonce: Option<String>,
@@ -39,14 +33,12 @@ pub struct ReplyContext {
 
 /// Serialize a reply context token (struct → JSON → base64).
 ///
-/// Uses standard base64 (with padding) to match jiny-m's format.
+/// Uses standard base64 (with padding).
 pub fn serialize_context(
     channel: &str,
     thread_name: &str,
     incoming_message_dir: &str,
     uid: &str,
-    model: Option<&str>,
-    mode: Option<&str>,
 ) -> String {
     let nonce = format!(
         "{}-{}",
@@ -59,8 +51,6 @@ pub fn serialize_context(
         thread_name: thread_name.to_string(),
         incoming_message_dir: incoming_message_dir.to_string(),
         uid: uid.to_string(),
-        model: model.map(|s| s.to_string()),
-        mode: mode.map(|s| s.to_string()),
         nonce: Some(nonce),
     };
 
@@ -106,32 +96,12 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_round_trip() {
-        let token = serialize_context("jiny283", "weather", "2026-03-27_10-00-00", "42", None, None);
+        let token = serialize_context("jiny283", "weather", "2026-03-27_10-00-00", "42");
         let ctx = deserialize_context(&token).unwrap();
         assert_eq!(ctx.channel, "jiny283");
         assert_eq!(ctx.thread_name, "weather");
         assert_eq!(ctx.incoming_message_dir, "2026-03-27_10-00-00");
         assert_eq!(ctx.uid, "42");
-        assert!(ctx.nonce.is_some());
-    }
-
-    #[test]
-    fn test_serialize_deserialize_with_model_mode() {
-        let token = serialize_context(
-            "jiny283",
-            "weather",
-            "2026-03-27_10-00-00",
-            "42",
-            Some("claude-sonnet-4"),
-            Some("build"),
-        );
-        let ctx = deserialize_context(&token).unwrap();
-        assert_eq!(ctx.channel, "jiny283");
-        assert_eq!(ctx.thread_name, "weather");
-        assert_eq!(ctx.incoming_message_dir, "2026-03-27_10-00-00");
-        assert_eq!(ctx.uid, "42");
-        assert_eq!(ctx.model, Some("claude-sonnet-4".to_string()));
-        assert_eq!(ctx.mode, Some("build".to_string()));
         assert!(ctx.nonce.is_some());
     }
 
@@ -163,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_minimal_token_is_short() {
-        let token = serialize_context("jiny283", "weather", "2026-03-27_10-00-00", "42", None, None);
+        let token = serialize_context("jiny283", "weather", "2026-03-27_10-00-00", "42");
         // Minimal token should be well under 200 chars
         assert!(token.len() < 200, "token too long: {} chars", token.len());
     }

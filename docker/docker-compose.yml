@@ -1,9 +1,10 @@
 services:
   jyc:
-    image: jyc:latest
+    image: jyc:${JYC_IMAGE_TAG:-dev}
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      target: ${JYC_BUILD_TARGET:-dev}  # "dev" (with Rust, ~2GB) or "production" (no Rust, ~740MB)
     volumes:
       # JYC data directory (config.toml, channels, workspace)
       - ${JYC_DATA_DIR:-./}:/opt/jyc

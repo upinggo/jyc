@@ -21,15 +21,8 @@ Environment variable GH_TOKEN should be set if you need to push branches or crea
 - The source is bind-mounted from the host (macOS) into the container (Linux)
 - CARGO_TARGET_DIR is set to /tmp/jyc-target to avoid cross-platform conflicts with the host's target/ directory
 - Do NOT build into ./target/ directly — always use the CARGO_TARGET_DIR environment variable (already set)
-- Rust is NOT pre-installed in the container to keep the image small. Install it on-demand before building (see below).
-
-## Install Rust (first time only)
-If `cargo` is not available, install the Rust toolchain:
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-```
-This takes ~30 seconds. The toolchain persists until the container is rebuilt.
+- Rust is pre-installed in the dev image. If using production image, install on-demand:
+  `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source "$HOME/.cargo/env"`
 
 ## Build (when instructed)
 1. Ensure Rust is installed (see above)

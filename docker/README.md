@@ -2,24 +2,40 @@
 
 Run JYC as a containerized service with process supervision via s6-overlay.
 
+## Image Variants
+
+| Variant | Target | Size | Rust | Use Case |
+|---------|--------|------|------|----------|
+| `jyc:dev` | `dev` | ~2GB | Pre-installed | Self-bootstrapping — AI can rebuild jyc from source |
+| `jyc:latest` | `production` | ~740MB | Not included | Production — just runs the pre-compiled binary |
+
+```bash
+# Build dev image (default — includes Rust for self-bootstrapping):
+podman build --target dev -t jyc:dev -f docker/Dockerfile ..
+
+# Build production image (smaller — no Rust):
+podman build --target production -t jyc:latest -f docker/Dockerfile ..
+```
+
+Both variants share the same `base` stage (tools, s6, OpenCode, gh CLI) — building one caches the base for the other.
+
 ## Architecture
 
-- **Multi-stage build**: Stage 1 compiles the Rust binary. Stage 2 is a runtime image with dev tools.
+- **Multi-stage build**: `base` (shared tools) → `builder` (Rust compile) → `production` or `dev`
 - **Single binary**: `jyc` (the MCP reply tool is a hidden subcommand `jyc mcp-reply-tool`).
 - **s6-overlay**: Process supervision — automatically restarts JYC if it crashes.
-- **Self-bootstrapping**: JYC source is bind-mounted into a thread workspace directory. The AI can rebuild, test, and deploy new versions without rebuilding the Docker image.
+- **Self-bootstrapping** (dev image): Rust toolchain pre-installed. AI can rebuild, test, and deploy new versions without rebuilding the Docker image.
 
 ## Included Tools
 
-| Tool | Purpose |
-|------|---------|
-| OpenCode | AI agent runtime |
-| git, gh CLI | Version control, PRs |
-| ripgrep, jq | Code search, JSON processing |
-| curl | HTTP requests |
-| build-essential | C compiler for native deps |
-
-**Note:** Rust is NOT pre-installed to keep the image small (~740MB vs ~2GB). The AI installs it on-demand when a rebuild is needed (~30 seconds). See `system.md.example` for the bootstrapping workflow.
+| Tool | Purpose | Image |
+|------|---------|-------|
+| OpenCode | AI agent runtime | both |
+| git, gh CLI | Version control, PRs | both |
+| ripgrep, jq | Code search, JSON processing | both |
+| curl | HTTP requests | both |
+| build-essential | C compiler for native deps | both |
+| Rust toolchain | Rebuild jyc from source | dev only |
 
 ## Prerequisites
 
@@ -59,17 +75,26 @@ cp docker/.env.example docker/.env
 
 ### 2. Build and start
 
-**With Docker Compose:**
+**With Docker/Podman Compose (dev image — default):**
 ```bash
 cd docker
 docker compose up --build -d
 docker compose logs -f
 ```
 
+**Production image (smaller, no Rust):**
+```bash
+cd docker
+JYC_BUILD_TARGET=production JYC_IMAGE_TAG=latest docker compose up --build -d
+```
+
 **With Podman (without Compose):**
 ```bash
-# Build
-podman build -t jyc:latest -f docker/Dockerfile .
+# Build dev image (with Rust):
+podman build --target dev -t jyc:dev -f docker/Dockerfile ..
+
+# Or production image (no Rust):
+podman build --target production -t jyc:latest -f docker/Dockerfile ..
 
 # Run
 podman run -d --name jyc \

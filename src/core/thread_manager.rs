@@ -276,8 +276,6 @@ async fn process_message(
                 &store_result.thread_path,
                 &store_result.message_dir,
                 None,
-                None,
-                None,
             )
             .await?;
     }
@@ -321,8 +319,6 @@ async fn process_message(
                     &store_result.thread_path,
                     &store_result.message_dir,
                     None,
-                    result.model.as_deref(),
-                    result.mode.as_deref(),
                 )
                 .await?;
             tracing::info!("Fallback reply sent");

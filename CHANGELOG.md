@@ -2,6 +2,32 @@
 
 All notable changes to JYC will be documented in this file.
 
+## [0.0.9] - 2026-03-30
+
+### Added
+
+**systemd service support for process supervision and self-bootstrapping**
+- systemd user service at `~/.config/systemd/user/jyc.service` for process supervision
+- `run-jyc.sh` wrapper script that sources `~/.zshrc.local` for environment variables
+- `jyc-ctl.sh` control script for service management (status, logs, restart, stop, start)
+- `SYSTEMD.md` documentation with setup, usage, and troubleshooting guide
+- `system.md.example` updated with systemd bootstrap instructions
+- Automatic restarts on crash (`Restart=always` with 5-second delay)
+- Service configuration tracked in repository (no s6-overlay)
+- Environment variables from `.zshrc.local` available to jyc (API keys, etc.)
+
+### Removed
+
+**s6-overlay approach** (replaced by systemd)
+- `s6-rc.d/` directory and service configuration files
+- `start-jyc.sh` (s6 initialization script)
+- `NATIVE_S6.md` (s6-specific documentation)
+
+### Changed
+
+- **DESIGN.md**: Added reference to `SYSTEMD.md` in References section
+- **Cargo.toml**: Bumped version from 0.0.8 to 0.0.9
+
 ## [0.0.8] - 2026-03-28
 
 ### Changed

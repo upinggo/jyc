@@ -2137,3 +2137,9 @@ Configurable per pattern via `attachments` in the pattern config.
 | `uuid` | 1.x (features: v4) | Internal message IDs |
 | `tokio-util` | 0.7.x | CancellationToken |
 | `async-trait` | 0.1.x | Async trait support |
+
+## References
+
+- [SYSTEMD.md](SYSTEMD.md) - systemd service management for process supervision and self-bootstrapping
+- [IMPLEMENTATION.md](IMPLEMENTATION.md) - Implementation phases and progress
+- [CHANGELOG.md](CHANGELOG.md) - Version history and changes

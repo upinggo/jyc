@@ -279,8 +279,9 @@ impl OpenCodeClient {
                                 match event_result {
                                     SseAction::Continue => {}
                                     SseAction::Done => { done = true; }
-                                    SseAction::Error(err) => {
-                                        result.error = Some(err);
+                                    SseAction::Error { technical, user_message } => {
+                                        result.error = Some(technical);
+                                        result.error_message = Some(user_message);
                                         done = true;
                                     }
                                 }
@@ -580,11 +581,19 @@ impl OpenCodeClient {
                 ) {
                     if err.session_id == session_id {
                         let error_name = &err.error.name;
+                        let user_message = user_friendly_error_message(error_name);
                         tracing::error!(
                             error = %error_name,
+                            session_id = %err.session_id,
+                            error_detail = ?err.error.data,
+                            raw_event = %event.properties,
+                            user_message = %user_message,
                             "Session error"
                         );
-                        return SseAction::Error(error_name.clone());
+                        return SseAction::Error {
+                            technical: error_name.clone(),
+                            user_message,
+                        };
                     }
                 } else {
                     // Fallback: try to extract error name from raw properties
@@ -594,6 +603,7 @@ impl OpenCodeClient {
                         .and_then(|n| n.as_str())
                         .or_else(|| event.properties.get("error").and_then(|e| e.as_str()))
                         .unwrap_or("UnknownError");
+                    let user_message = user_friendly_error_message(&error_name);
                     let sid = event.properties
                         .get("sessionID")
                         .and_then(|s| s.as_str())
@@ -601,10 +611,15 @@ impl OpenCodeClient {
                     if sid == session_id || sid.is_empty() {
                         tracing::error!(
                             error = %error_name,
-                            raw = %event.properties,
-                            "Session error (raw)"
+                            session_id = %sid,
+                            raw_event = %event.properties,
+                            user_message = %user_message,
+                            "Session error (fallback parsing)"
                         );
-                        return SseAction::Error(error_name.to_string());
+                        return SseAction::Error {
+                            technical: error_name.to_string(),
+                            user_message,
+                        };
                     }
                 }
                 SseAction::Continue
@@ -622,7 +637,22 @@ impl OpenCodeClient {
 enum SseAction {
     Continue,
     Done,
-    Error(String),
+    Error {
+        technical: String,
+        user_message: String,
+    },
+}
+
+/// Convert technical error names to user-friendly messages.
+fn user_friendly_error_message(error_name: &str) -> String {
+    match error_name {
+        "APIError" => "Process encountered a server error. Please try again.".to_string(),
+        "ContextOverflow" => "Process exceeded context limits. Please try again.".to_string(),
+        "TimeoutError" => "Process timed out. Please try again.".to_string(),
+        "AuthenticationError" => "Process encountered an authentication error. Please try again.".to_string(),
+        "RateLimitError" => "Process encountered rate limiting. Please try again later.".to_string(),
+        _ => "Process encountered an error. Please try again.".to_string(),
+    }
 }
 
 /// Accumulated result from SSE streaming.
@@ -633,6 +663,7 @@ pub struct SseResult {
     pub model_id: Option<String>,
     pub provider_id: Option<String>,
     pub error: Option<String>,
+    pub error_message: Option<String>,
     pub timed_out: bool,
 }
 

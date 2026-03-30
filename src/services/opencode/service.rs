@@ -175,6 +175,11 @@ impl OpenCodeService {
     ) -> Result<GenerateReplyResult> {
         // ContextOverflow recovery
         if let Some(ref error) = result.error {
+            tracing::error!(
+                error = %error,
+                user_message = ?result.error_message,
+                "SSE result contains error"
+            );
             if error.contains("ContextOverflow") {
                 tracing::warn!("ContextOverflow — new session + retry");
                 session::delete_session(thread_path).await?;
@@ -239,18 +244,28 @@ impl OpenCodeService {
                     mode: Some(mode_label.to_string()),
                 });
             }
-            tracing::error!("Timed out with no reply");
+            let timeout_message = "Process timed out. Please try again.";
+            tracing::error!(
+                user_message = %timeout_message,
+                "Timed out with no reply"
+            );
             return Ok(GenerateReplyResult {
-                reply_sent_by_tool: false, reply_text: None,
+                reply_sent_by_tool: false, reply_text: Some(timeout_message.to_string()),
                 model_id: result.model_id, provider_id: result.provider_id,
                 mode: Some(mode_label.to_string()),
             });
         }
 
         // Fallback: extract text
+        let reply_text = if let Some(ref error_message) = result.error_message {
+            error_message.clone()
+        } else {
+            extract_text_from_parts(&result.parts).unwrap_or_default()
+        };
+
         Ok(GenerateReplyResult {
             reply_sent_by_tool: false,
-            reply_text: extract_text_from_parts(&result.parts),
+            reply_text: Some(reply_text),
             model_id: result.model_id,
             provider_id: result.provider_id,
             mode: Some(mode_label.to_string()),

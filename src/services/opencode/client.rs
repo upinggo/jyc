@@ -289,7 +289,12 @@ impl OpenCodeClient {
                                 // (needed by both MCP reply tool and fallback for footer display)
                                 if result.model_id.is_some() && !model_updated {
                                     if let Ok(mut ctx) = crate::mcp::context::load_reply_context(directory).await {
-                                        ctx.model = result.model_id.clone();
+                                        let combined_model = if let (Some(provider), Some(model)) = (&result.provider_id, &result.model_id) {
+                                            Some(format!("{}/{}", provider, model))
+                                        } else {
+                                            result.model_id.clone()
+                                        };
+                                        ctx.model = combined_model;
                                         crate::mcp::context::save_reply_context(directory, &ctx).await.ok();
                                     }
                                     model_updated = true;
@@ -397,7 +402,12 @@ impl OpenCodeClient {
                             // When we first learn the model, record on the parent ai span
                             if result.model_id.is_none() {
                                 if let Some(ref model) = info.model_id {
-                                    let m_value = format!("{}:{}", model, mode_label);
+                                    let combined_model = if let (Some(ref provider), Some(ref model_id)) = (info.provider_id.as_ref(), info.model_id.as_ref()) {
+                                        format!("{}/{}", provider, model_id)
+                                    } else {
+                                        model.clone()
+                                    };
+                                    let m_value = format!("{}:{}", combined_model, mode_label);
                                     tracing::Span::current().record("m", &m_value);
                                     tracing::info!("AI model selected");
                                 }

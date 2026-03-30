@@ -16,6 +16,12 @@ All notable changes to JYC will be documented in this file.
 - Service configuration tracked in repository (no s6-overlay)
 - Environment variables from `.zshrc.local` available to jyc (API keys, etc.)
 
+**Combined provider/model name in reply context and log spans**
+- Model field in reply-context.json now uses `<provider-id>/<model-id>` format (instead of just model_id)
+- Log span `m` field also uses combined format (e.g., `ark/deepseek-v3.2:build`)
+- Applied to both email reply footers and structured logging
+- Example: `ark/deepseek-v3.2` instead of `deepseek-v3.2`
+
 ### Removed
 
 **s6-overlay approach** (replaced by systemd)

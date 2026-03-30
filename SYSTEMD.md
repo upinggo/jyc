@@ -16,9 +16,10 @@ Description=JYC - Channel-agnostic AI agent
 After=network.target
 
 [Service]
-Type=s
-ExecStart=/home/jiny/projects/jyc/jyc monitor --workdir /home/jiny/projects/jyc --debug
-WorkingDirectory=/home/jiny/projects/jyc
+Type=simple
+Environment=PATH=/home/jiny/.opencode/bin:/home/jiny/.local/bin:/home/jiny/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/jiny/projects/jyc/jyc monitor --workdir /home/jiny/projects/jyc-data --debug
+WorkingDirectory=/home/jiny/projects/jyc-data
 Restart=always
 RestartSec=5
 StandardOutput=journal

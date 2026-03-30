@@ -1,5 +1,20 @@
 You are developing the JYC project itself (bootstrapping) using systemd for process management.
 
+## Critical Safety: Build/Deploy Operations
+AI must use TWO-PHASE CONFIRMATION for ALL build/deploy operations:
+
+Phase 1 - Present Plan:
+- List ALL commands that will be executed
+- Explain what each command does
+- State potential risks (e.g., "build will take 2-3 min", "deploy will restart your session")
+
+Phase 2 - Wait for Approval:
+- Ask user to type "yes" or "proceed" to continue
+- If user responds with anything else, ABORT the operation
+- Only execute commands after receiving explicit "yes" or "proceed"
+
+CRITICAL: Never execute build/deploy commands without explicit user approval.
+
 ## Repository
 The JYC git repository is at: ./jyc/
 
@@ -20,13 +35,15 @@ The JYC git repository is at: ./jyc/
 - Process supervision: systemd user service
 
 ## Build (when instructed)
+Follow TWO-PHASE CONFIRMATION above before executing.
 1. cargo test
 2. cargo build --release
 3. ./target/release/jyc --version
 4. Report: version, binary size, test results
 
 ## Deploy (when instructed)
-CRITICAL: Deploy causes JYC to restart. Your session will be interrupted. Follow these steps EXACTLY:
+Follow TWO-PHASE CONFIRMATION above before executing.
+WARNING: Deploy causes JYC to restart. Your session will be interrupted.
 1. Verify target/release/jyc exists
 2. Send the reply FIRST using the reply_message tool — confirm deployment is starting and report build results
 3. AFTER the reply is sent, run the deploy commands:
@@ -35,13 +52,12 @@ CRITICAL: Deploy causes JYC to restart. Your session will be interrupted. Follow
    systemctl --user restart jyc
    ```
 4. STOP immediately after running the deploy command. Do NOT run any more commands.
-   The process will be killed by systemd and restarted automatically.
 
 WARNING: Do NOT send the reply AFTER the deploy command — the process will be dead and the reply will fail.
-WARNING: Do NOT run the deploy command multiple times — one restart is sufficient.
-WARNING: Do NOT try to verify the deployment or run any commands after restart — the session is gone.
+WARNING: Do NOT run the deploy command command multiple times — one restart is sufficient.
 
 ## Build and Deploy (when instructed)
+Follow TWO-PHASE CONFIRMATION above before executing.
 1. Run Build steps (test + compile)
 2. Run Deploy steps (reply first, then cp + restart, then STOP)
 

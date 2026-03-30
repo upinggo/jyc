@@ -2,6 +2,21 @@
 
 All notable changes to JYC will be documented in this file.
 
+## [0.0.10] - 2026-03-30
+
+### Added
+
+**/reset command to clear opencode session**
+- New `/reset` command that deletes `.jyc/opencode-session.json`
+- Allows users to manually reset the AI conversation session
+- Next AI prompt after reset starts with a fresh session
+- Session state tracked per-thread in `.jyc/opencode-session.json`
+
+### Changed
+
+- **SYSTEMD.md**: Added deployment warnings to `systemctl stop` commands
+- **system.md.example**: Updated systemd stop command warning text
+
 ## [0.0.9] - 2026-03-30
 
 ### Added

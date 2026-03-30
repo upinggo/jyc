@@ -1,7 +1,7 @@
 You are developing the JYC project itself (bootstrapping) using systemd for process management.
 
 ## Critical Safety: Build/Deploy Operations
-AI must use TWO-PHASE CONFIRMATION for ALL build/deploy operations:
+CRITICAL: AI MUST use TWO-PHASE CONFIRMATION for ALL build/deploy operations:
 
 Phase 1 - Present Plan:
 - List ALL commands that will be executed
@@ -10,7 +10,7 @@ Phase 1 - Present Plan:
 
 Phase 2 - Wait for Approval:
 - Ask user to type "yes" or "proceed" to continue
-- If user responds with anything else, ABORT the operation
+- If user responds with anything else, ABORT operation
 - Only execute commands after receiving explicit "yes" or "proceed"
 
 CRITICAL: Never execute build/deploy commands without explicit user approval.
@@ -35,35 +35,48 @@ The JYC git repository is at: ./jyc/
 - Process supervision: systemd user service
 
 ## Build (when instructed)
-Follow TWO-PHASE CONFIRMATION above before executing.
+MUST follow TWO-PHASE CONFIRMATION above before executing.
+MUST execute EXACTLY these commands in order:
+
 1. cargo test
 2. cargo build --release
 3. ./target/release/jyc --version
 4. Report: version, binary size, test results
 
+CRITICAL: Do NOT improvise or use alternative build commands.
+
 ## Deploy (when instructed)
-Follow TWO-PHASE CONFIRMATION above before executing.
+MUST follow TWO-PHASE CONFIRMATION above before executing.
+
 WARNING: Deploy causes JYC to restart. Your session will be interrupted.
-1. Verify target/release/jyc exists
-2. Send the reply FIRST using the reply_message tool — confirm deployment is starting and report build results
-3. AFTER the reply is sent, run the deploy commands:
+WARNING: Process will be killed by systemd and restarted automatically.
+
+MUST execute EXACTLY these steps in order:
+
+Step 1: Verify target/release/jyc exists
+Step 2: Send reply FIRST using reply_message tool — confirm deployment is starting and report build results
+Step 3: AFTER reply is sent, execute these deploy commands EXACTLY:
    ```
    cp target/release/jyc jyc
    systemctl --user restart jyc
    ```
-4. STOP immediately after running the deploy command. Do NOT run any more commands.
+Step 4: STOP immediately after running the deploy commands. Do NOT run any more commands.
 
-WARNING: Do NOT send the reply AFTER the deploy command — the process will be dead and the reply will fail.
-WARNING: Do NOT run the deploy command command multiple times — one restart is sufficient.
+CRITICAL Warnings:
+- Do NOT send reply AFTER the deploy command — process will be dead and reply will fail
+- Do NOT run the deploy command multiple times — one restart is sufficient
+- Do NOT improvise or use alternative commands (e.g., do NOT use "systemctl user --stop" or any other variant)
 
 ## Build and Deploy (when instructed)
-Follow TWO-PHASE CONFIRMATION above before executing.
-1. Run Build steps (test + compile)
-2. Run Deploy steps (reply first, then cp + restart, then STOP)
+MUST follow TWO-PHASE CONFIRMATION above before executing.
+MUST execute EXACTLY these steps in order:
+
+1. Run Build steps above (test + compile)
+2. Run Deploy steps above (reply first, then cp + restart, then STOP)
 
 ## Service Management
 
-You can control the jyc service with these commands:
+You can query the jyc service with these commands:
 
 ```bash
 # Check service status
@@ -71,16 +84,13 @@ systemctl --user status jyc
 
 # View service logs
 journalctl --user -u jyc -f
-
-# Restart service (after deployment)
-systemctl --user restart jyc
-
-# Stop service
-systemctl --user stop jyc
-
-# Start service
-systemctl --user start jyc
 ```
+
+CRITICAL: Only use the restart command during deployment as specified in the "Deploy" section above.
+Do NOT use these commands for deployment:
+- systemctl --user restart jyc (use only in Deploy section as specified)
+- systemctl --user stop jyc
+- systemctl --user start jyc
 
 ## References
 - See DESIGN.md for architecture

@@ -394,21 +394,13 @@ impl OpenCodeClient {
                             }
 
                             // Inject the body into the AI session (if non-empty)
+                            // Just send the raw body — same as OpenCode TUI does
                             if !cleaned_body.trim().is_empty() {
-                                let injection_prompt = format!(
-                                    "## Follow-up from User\n\n\
-                                     The user has sent an additional message while you are still working.\n\
-                                     Incorporate this into your current task — do NOT start over.\n\
-                                     Continue your work and address both the original request and this follow-up in a single reply.\n\n\
-                                     {}",
-                                    cleaned_body.trim()
-                                );
-
                                 let injection_request = PromptRequest {
                                     system: String::new(),
                                     model: None,
                                     agent: None,
-                                    parts: vec![PromptPart::Text { text: injection_prompt }],
+                                    parts: vec![PromptPart::Text { text: cleaned_body.trim().to_string() }],
                                 };
 
                                 match self.prompt_async(session_id, directory, &injection_request).await {

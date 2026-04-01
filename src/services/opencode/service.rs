@@ -9,7 +9,9 @@ use super::types::*;
 use super::{session, prompt_builder, OpenCodeServer};
 use crate::channels::types::InboundMessage;
 use crate::config::types::AgentConfig;
+use crate::core::thread_manager::QueueItem;
 use crate::services::agent::{AgentResult, AgentService};
+use tokio::sync::mpsc;
 
 /// Encapsulates all OpenCode AI interaction logic.
 ///
@@ -41,6 +43,7 @@ impl OpenCodeService {
         thread_name: &str,
         thread_path: &Path,
         message_dir: &str,
+        pending_rx: &mut mpsc::Receiver<QueueItem>,
     ) -> Result<GenerateReplyResult> {
         let ch = &message.channel;
 
@@ -133,7 +136,7 @@ impl OpenCodeService {
         );
 
         let sse_result = client
-            .prompt_with_sse(&session_id, thread_path, &request, &mode_label)
+            .prompt_with_sse(&session_id, thread_path, &request, &mode_label, pending_rx)
             .instrument(ai_span.clone())
             .await;
 
@@ -142,7 +145,7 @@ impl OpenCodeService {
             Ok(result) => {
                 self.handle_sse_result(
                     result, thread_name, thread_path,
-                    &client, &session_id, &request, &mode_label,
+                    &client, &session_id, &request, &mode_label, pending_rx,
                 ).await?
             }
             Err(e) => {
@@ -152,7 +155,7 @@ impl OpenCodeService {
                     .await?;
                 self.handle_blocking_result(
                     blocking_result, thread_name, thread_path,
-                    &client, &session_id, &request, &mode_label,
+                    &client, &session_id, &request,
                 ).await?
             }
         };
@@ -172,6 +175,7 @@ impl OpenCodeService {
         session_id: &str,
         request: &PromptRequest,
         mode_label: &str,
+        pending_rx: &mut mpsc::Receiver<QueueItem>,
     ) -> Result<GenerateReplyResult> {
         // ContextOverflow recovery
         if let Some(ref error) = result.error {
@@ -186,7 +190,7 @@ impl OpenCodeService {
                 let new_id = session::create_new_session(client, thread_path).await?;
                 let retry = client.prompt_blocking(&new_id, thread_path, request).await?;
                 return self.handle_blocking_result(
-                    retry, thread_name, thread_path, client, &new_id, request, mode_label,
+                    retry, thread_name, thread_path, client, &new_id, request,
                 ).await;
             }
         }
@@ -202,7 +206,6 @@ impl OpenCodeService {
                 reply_text: None,
                 model_id: result.model_id,
                 provider_id: result.provider_id,
-                mode: Some(mode_label.to_string()),
             });
         }
 
@@ -218,20 +221,18 @@ impl OpenCodeService {
             session::delete_session(thread_path).await?;
             let new_id = session::create_new_session(client, thread_path).await?;
             session::cleanup_signal_file(thread_path).await;
-            let retry = client.prompt_with_sse(&new_id, thread_path, request, mode_label).await?;
+            let retry = client.prompt_with_sse(&new_id, thread_path, request, mode_label, pending_rx).await?;
             let sent = retry.reply_sent_by_tool || session::check_signal_file(thread_path).await;
             if sent {
                 return Ok(GenerateReplyResult {
                     reply_sent_by_tool: true, reply_text: None,
                     model_id: retry.model_id, provider_id: retry.provider_id,
-                    mode: Some(mode_label.to_string()),
                 });
             }
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: false,
                 reply_text: extract_text_from_parts(&retry.parts),
                 model_id: retry.model_id, provider_id: retry.provider_id,
-                mode: Some(mode_label.to_string()),
             });
         }
 
@@ -241,7 +242,6 @@ impl OpenCodeService {
                 return Ok(GenerateReplyResult {
                     reply_sent_by_tool: true, reply_text: None,
                     model_id: result.model_id, provider_id: result.provider_id,
-                    mode: Some(mode_label.to_string()),
                 });
             }
             let timeout_message = "Process timed out. Please try again.";
@@ -252,7 +252,6 @@ impl OpenCodeService {
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: false, reply_text: Some(timeout_message.to_string()),
                 model_id: result.model_id, provider_id: result.provider_id,
-                mode: Some(mode_label.to_string()),
             });
         }
 
@@ -268,7 +267,6 @@ impl OpenCodeService {
             reply_text: Some(reply_text),
             model_id: result.model_id,
             provider_id: result.provider_id,
-            mode: Some(mode_label.to_string()),
         })
     }
 
@@ -281,7 +279,6 @@ impl OpenCodeService {
         _client: &OpenCodeClient,
         _session_id: &str,
         _request: &PromptRequest,
-        mode_label: &str,
     ) -> Result<GenerateReplyResult> {
         if let Some(ref data) = result.data {
             if let Some(ref info) = data.info {
@@ -295,7 +292,6 @@ impl OpenCodeService {
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: true, reply_text: None,
                 model_id: None, provider_id: None,
-                mode: Some(mode_label.to_string()),
             });
         }
 
@@ -304,7 +300,6 @@ impl OpenCodeService {
             reply_sent_by_tool: false,
             reply_text: extract_text_from_parts(&parts),
             model_id: None, provider_id: None,
-            mode: Some(mode_label.to_string()),
         })
     }
 }
@@ -317,8 +312,9 @@ impl AgentService for OpenCodeService {
         thread_name: &str,
         thread_path: &Path,
         message_dir: &str,
+        pending_rx: &mut mpsc::Receiver<QueueItem>,
     ) -> Result<AgentResult> {
-        let result = self.generate_reply(message, thread_name, thread_path, message_dir).await?;
+        let result = self.generate_reply(message, thread_name, thread_path, message_dir, pending_rx).await?;
 
         Ok(AgentResult {
             reply_sent_by_tool: result.reply_sent_by_tool,
@@ -334,7 +330,6 @@ struct GenerateReplyResult {
     reply_text: Option<String>,
     model_id: Option<String>,
     provider_id: Option<String>,
-    mode: Option<String>,
 }
 
 /// Extract text content from accumulated response parts.
@@ -357,4 +352,5 @@ fn is_prompt_echo(text: &str) -> bool {
     let trimmed = text.trim();
     trimmed.starts_with("## Incoming Message")
         || trimmed.starts_with("## Conversation history")
+        || trimmed.starts_with("<system-reminder>")
 }

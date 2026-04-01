@@ -18,10 +18,10 @@ use crate::core::message_storage::{MessageStorage, StoreResult};
 use crate::services::agent::AgentService;
 
 /// An item in a thread's message queue.
-struct QueueItem {
-    message: InboundMessage,
-    pattern_match: PatternMatch,
-    attachment_config: Option<AttachmentConfig>,
+pub struct QueueItem {
+    pub message: InboundMessage,
+    pub pattern_match: PatternMatch,
+    pub attachment_config: Option<AttachmentConfig>,
 }
 
 /// Per-thread queue stats.
@@ -170,6 +170,7 @@ impl ThreadManager {
                     &storage,
                     &outbound,
                     agent.as_ref(),
+                    &mut rx,
                 ).await {
                     tracing::error!(
                         error = %e,
@@ -221,6 +222,7 @@ async fn process_message(
     storage: &MessageStorage,
     outbound: &EmailOutboundAdapter,
     agent: &dyn AgentService,
+    pending_rx: &mut mpsc::Receiver<QueueItem>,
 ) -> Result<()> {
     let message = &item.message;
 
@@ -306,7 +308,7 @@ async fn process_message(
     };
 
     let result = agent
-        .process(&message, thread_name, &store_result.thread_path, &store_result.message_dir)
+        .process(&message, thread_name, &store_result.thread_path, &store_result.message_dir, pending_rx)
         .await?;
 
     // ── 6. HANDLE AGENT RESULT ────────────────────────────────────────

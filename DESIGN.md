@@ -869,6 +869,35 @@ root_cancel (top-level)
 - **In-memory queues** — Lost on restart; IMAP re-fetch handles recovery
 - **Queue overflow** — Messages dropped with warning when mpsc buffer is full
 
+### Live Message Injection
+
+When a user sends a follow-up message while the AI is still processing the first message in the same thread, the follow-up is injected into the ongoing AI session rather than waiting in the queue.
+
+**Behavior:**
+- Message 2 arrives while AI processes Message 1 → Message 2 body injected into same session → user gets one combined reply
+- Message 2 arrives after AI finished Message 1 → normal sequential processing → two separate replies
+
+**How it works:**
+1. The worker passes its queue receiver (`rx`) to `agent.process()` during processing
+2. The agent passes `rx` through to the SSE streaming loop (`prompt_with_sse()`)
+3. The SSE `tokio::select!` loop monitors `rx.recv()` alongside SSE events and timeout checks
+4. When a new message arrives during streaming:
+   - Store the new message as `received.md` (new message directory)
+   - Process commands from the new message (e.g., `/model` switch)
+   - Strip quoted history from the body
+   - Update `.jyc/reply-context.json` with the new `incomingMessageDir`
+   - Send the body as a follow-up prompt via `POST /session/:id/prompt_async`
+5. The AI receives the follow-up in the same conversation context and adjusts its work
+
+**Injection prompt format** (minimal — just the body, no system prompt or metadata):
+```
+## Follow-up Message
+
+Please also add a chart to the PPT.
+```
+
+**OpenCode API support:** `POST /session/:id/prompt_async` can be called while a session is busy. OpenCode queues the message internally — this is the same mechanism the OpenCode TUI uses.
+
 ## Worker (OpenCode Service)
 
 ### Responsibility Separation: ThreadManager vs AgentService vs OutboundAdapter

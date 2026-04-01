@@ -1,8 +1,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use std::path::Path;
+use tokio::sync::mpsc;
 
 use crate::channels::types::InboundMessage;
+use crate::core::thread_manager::QueueItem;
 
 /// Result of agent processing.
 ///
@@ -23,6 +25,7 @@ pub struct AgentResult {
 ///
 /// The agent is responsible for:
 /// - AI interaction (prompts, sessions, streaming, error recovery)
+/// - Monitoring the queue for live message injection during processing
 /// - Returning raw response text
 ///
 /// The agent is NOT responsible for:
@@ -33,6 +36,9 @@ pub struct AgentResult {
 pub trait AgentService: Send + Sync {
     /// Generate a response for a message.
     ///
+    /// `pending_rx` allows the agent to monitor for new messages arriving
+    /// during AI processing (live message injection).
+    ///
     /// Returns `AgentResult` with either:
     /// - `reply_sent_by_tool: true` — MCP tool already sent the reply
     /// - `reply_text: Some(text)` — raw AI text for outbound adapter to handle
@@ -42,5 +48,6 @@ pub trait AgentService: Send + Sync {
         thread_name: &str,
         thread_path: &Path,
         message_dir: &str,
+        pending_rx: &mut mpsc::Receiver<QueueItem>,
     ) -> Result<AgentResult>;
 }

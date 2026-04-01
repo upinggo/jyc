@@ -4,8 +4,10 @@ use reqwest_eventsource::{Event, EventSource};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
+use tokio::sync::mpsc;
 
 use super::types::*;
+use crate::core::thread_manager::QueueItem;
 use crate::utils::constants::*;
 
 /// OpenCode HTTP + SSE client.
@@ -187,6 +189,7 @@ impl OpenCodeClient {
         directory: &Path,
         request: &PromptRequest,
         mode_label: &str,
+        pending_rx: &mut mpsc::Receiver<QueueItem>,
     ) -> Result<SseResult> {
         // 1. Subscribe to SSE events scoped to the thread directory
         let sse_url = format!(
@@ -352,6 +355,69 @@ impl OpenCodeClient {
                         // TODO: on_progress callback (Phase 6)
 
                         last_progress_log = Instant::now();
+                    }
+                }
+
+                // Live message injection: new message arrived while AI is processing
+                new_item = pending_rx.recv() => {
+                    if let Some(item) = new_item {
+                        tracing::info!(
+                            sender = %item.message.sender_address,
+                            topic = %item.message.topic,
+                            "Live message injection — follow-up received during AI processing"
+                        );
+
+                        // Store the injected message
+                        let storage = crate::core::message_storage::MessageStorage::new(
+                            directory.parent().unwrap_or(directory),
+                        );
+                        let thread_name = directory
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+
+                        if let Ok(store_result) = storage
+                            .store(&item.message, &thread_name, item.attachment_config.as_ref())
+                            .await
+                        {
+                            // Process commands from injected message
+                            let raw_body = item.message.content.text.as_deref()
+                                .or(item.message.content.markdown.as_deref())
+                                .unwrap_or("");
+
+                            let cleaned_body = crate::core::email_parser::strip_quoted_history(raw_body);
+
+                            // Update reply-context.json with the new message dir
+                            if let Ok(mut ctx) = crate::mcp::context::load_reply_context(directory).await {
+                                ctx.incoming_message_dir = store_result.message_dir.clone();
+                                crate::mcp::context::save_reply_context(directory, &ctx).await.ok();
+                            }
+
+                            // Inject the body into the AI session (if non-empty)
+                            if !cleaned_body.trim().is_empty() {
+                                let injection_prompt = format!(
+                                    "## Follow-up Message\n\n{}",
+                                    cleaned_body.trim()
+                                );
+
+                                let injection_request = PromptRequest {
+                                    system: String::new(),
+                                    model: None,
+                                    agent: None,
+                                    parts: vec![PromptPart::Text { text: injection_prompt }],
+                                };
+
+                                match self.prompt_async(session_id, directory, &injection_request).await {
+                                    Ok(()) => {
+                                        tracing::info!("Follow-up message injected into AI session");
+                                        last_activity = Instant::now();
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "Failed to inject follow-up message");
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -522,7 +588,7 @@ impl OpenCodeClient {
                     // Log AI text content at debug level (skip empty)
                     if part.part_type == "text" {
                         if let Some(ref text) = part.text {
-                            if !text.is_empty() {
+                            if !text.is_empty() && !text.trim().starts_with("<system-reminder>") {
                             let preview = if text.len() > 200 {
                                 format!("{}...", &text[..text.floor_char_boundary(200)])
                             } else {
@@ -556,9 +622,14 @@ impl OpenCodeClient {
                             tracing::debug!(
                                 status = %new_type,
                                 attempt = ?status.status.attempt,
+                                message = ?status.status.message,
                                 "Session status"
                             );
-                            *last_status_type = Some(new_type);
+                            *last_status_type = Some(new_type.clone());
+                        }
+                        // Clear tool dedup on retry so retried tool calls are logged
+                        if new_type == "retry" {
+                            logged_tools.clear();
                         }
                     }
                 }

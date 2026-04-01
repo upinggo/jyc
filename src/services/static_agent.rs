@@ -1,14 +1,17 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use std::path::Path;
+use tokio::sync::mpsc;
 
 use super::agent::{AgentResult, AgentService};
 use crate::channels::types::InboundMessage;
+use crate::core::thread_manager::QueueItem;
 
 /// Static agent — replies with a fixed text (no AI).
 ///
 /// Channel-agnostic — just returns the configured text.
 /// The outbound adapter handles formatting, sending, and storing.
+/// `pending_rx` is accepted but not used (no AI session to inject into).
 pub struct StaticAgentService {
     reply_text: String,
 }
@@ -26,9 +29,10 @@ impl AgentService for StaticAgentService {
     async fn process(
         &self,
         _message: &InboundMessage,
-        thread_name: &str,
+        _thread_name: &str,
         _thread_path: &Path,
         _message_dir: &str,
+        _pending_rx: &mut mpsc::Receiver<QueueItem>,
     ) -> Result<AgentResult> {
         tracing::info!("Static reply generated");
 

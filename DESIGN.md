@@ -900,10 +900,9 @@ When a user sends a follow-up message while the AI is still processing the first
    - Send the body as a follow-up prompt via `POST /session/:id/prompt_async`
 5. The AI receives the follow-up in the same conversation context and adjusts its work
 
-**Injection prompt format** (minimal — just the body, no system prompt or metadata):
-```
-## Follow-up Message
+**Injection format:** Raw body only — no framing, no instructions. This matches how the OpenCode TUI handles messages sent during AI processing. The AI treats it as a natural follow-up in the conversation.
 
+```
 Please also add a chart to the PPT.
 ```
 

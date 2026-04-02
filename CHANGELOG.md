@@ -31,11 +31,16 @@ All notable changes to JYC will be documented in this file.
 - Updated documentation in `DESIGN.md` to reflect new lifecycle
 
 **IMAP monitor resilience and timeout handling**
-- Add 5s timeout to IMAP logout to prevent 15-minute hangs on dead connections
-- Add 60s timeout to all IMAP operations and reduce IDLE timeout to 2 minutes
-- Reduce IDLE hard timeout from 30 minutes to 5 minutes for faster recovery
-- Add hard timeout guard around IMAP IDLE to detect dead TCP connections
-- Fix IMAP monitor stability for long-running operations
+- Add 60s timeout to all IMAP operations (connect, select, fetch_range, fetch_uid) to detect dead TCP connections
+- Add 2-min hard timeout guard around IMAP IDLE to detect half-open TCP connections
+- Add 5s timeout to IMAP logout to prevent 15-min hang on dead connections (TCP retransmission timeout)
+- Remove fatal retry limit — monitor retries indefinitely at max backoff instead of giving up after 5 failures
+- Force disconnect after `check_for_new()` failure to avoid entering IDLE on a dead connection
+- Clean up closed senders from thread_queues to prevent unbounded HashMap growth
+- Drain completed worker JoinHandles when spawning new workers
+- Add UID compaction to StateManager (auto-prune when exceeding 5000 entries)
+- Share `reqwest::Client` across OpenCode requests (connection pool reuse)
+- Move 10 regex compilations to `LazyLock` statics (email_parser and smtp/client)
 
 **Deployment reliability**
 - Use `systemd-run` to escape jyc cgroup during self-deploy (prevents deployment from being killed)
@@ -43,8 +48,9 @@ All notable changes to JYC will be documented in this file.
 - Add `jyc/` path prefix to deploy skills for proper resolution
 
 ### Changed
-- Send model as `{providerID, modelID}` object in prompt API for better compatibility
-- Show model in log span immediately instead of waiting for SSE
+- Send model as `{providerID, modelID}` object in prompt API (breaking API change in OpenCode)
+- Show model in log span immediately at prompt time instead of waiting for SSE discovery
+- Fix duplicate `m=` field in log span (was recorded twice: upfront + SSE)
 - Remove deprecated `system.md.example` files with migration notice
 
 ## [0.0.11] - 2026-04-01

@@ -4,6 +4,24 @@ All notable changes to JYC will be documented in this file.
 
 ## [0.0.12] - 2026-04-02
 
+### Added
+
+**Skill-based bootstrapping (replaces per-prompt system.md)**
+- Migrate bootstrapping instructions from `system.md` (sent every prompt) to OpenCode's native discovery mechanisms
+- `AGENTS.md` (project-level): project context, tech stack, coding conventions, git rules, dev workflow
+- `agents.example.md`: template for thread-level AGENTS.md with self-bootstrapping context and environment hint
+- `.opencode/skills/jyc-deploy-bare/SKILL.md`: on-demand skill for bare metal deployment (deploy.sh + nohup)
+- `.opencode/skills/jyc-deploy-docker/SKILL.md`: on-demand skill for Docker deployment (s6 process supervisor)
+- Skills loaded by AI only when needed, reducing prompt size and improving performance
+
+**Model listing with wildcard filtering**
+- Add `/model ls [pattern]` command to list available models with wildcard support
+- Support `*` (multiple characters) and `?` (single character) wildcards
+- Handle email escaping (`ark\*` → `ark*`) for better UX
+- Case-insensitive pattern matching
+- Remove bare `/model` command (now requires arguments)
+- Comprehensive tests for wildcard functionality
+
 ### Fixed
 
 **Multiple reply support**
@@ -12,26 +30,22 @@ All notable changes to JYC will be documented in this file.
 - Context file is overwritten on each new incoming message; cleanup only for tests and manual operations
 - Updated documentation in `DESIGN.md` to reflect new lifecycle
 
-### Added
+**IMAP monitor resilience and timeout handling**
+- Add 5s timeout to IMAP logout to prevent 15-minute hangs on dead connections
+- Add 60s timeout to all IMAP operations and reduce IDLE timeout to 2 minutes
+- Reduce IDLE hard timeout from 30 minutes to 5 minutes for faster recovery
+- Add hard timeout guard around IMAP IDLE to detect dead TCP connections
+- Fix IMAP monitor stability for long-running operations
 
-**Live message injection**
-- Follow-up messages sent during AI processing are injected into the ongoing session via `prompt_async`
-- Queue receiver (`rx`) flows through: ThreadManager → AgentService → OpenCodeService → SSE Client
-- New `tokio::select!` arm in SSE loop monitors `pending_rx.recv()` for incoming messages
-- Injected messages: stored as `received.md`, reply-context.json updated, body sent as raw prompt (same as OpenCode TUI)
-- OpenCode API `POST /session/:id/prompt_async` supports sending to busy sessions
-- AgentService trait: added `pending_rx: &mut mpsc::Receiver<QueueItem>` parameter
-- QueueItem made public for cross-module access
-
-**Logging improvements**
-- `<system-reminder>` filtered from `is_prompt_echo()` — prevents OpenCode plan mode reminders from appearing in fallback replies
-- `<system-reminder>` filtered from AI response text DEBUG log
-- Session retry logs include `message` field for better debugging
-- `logged_tools` HashSet cleared on retry — retried tool calls are now visible in logs
+**Deployment reliability**
+- Use `systemd-run` to escape jyc cgroup during self-deploy (prevents deployment from being killed)
+- Ensure `deploy.sh` survives parent process death
+- Add `jyc/` path prefix to deploy skills for proper resolution
 
 ### Changed
-- Injection prompt: raw body only (no framing instructions) — matches OpenCode TUI behavior
-- Dev build profile: reduced debug info (debug=1, no debug for deps) for faster builds
+- Send model as `{providerID, modelID}` object in prompt API for better compatibility
+- Show model in log span immediately instead of waiting for SSE
+- Remove deprecated `system.md.example` files with migration notice
 
 ## [0.0.11] - 2026-04-01
 

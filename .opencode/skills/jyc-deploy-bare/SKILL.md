@@ -3,6 +3,9 @@ name: jyc-deploy-bare
 description: Build and deploy jyc on bare metal using deploy.sh with nohup. Use when instructed to build, deploy, or build-and-deploy jyc.
 ---
 
+IMPORTANT: The JYC source repository is at ./jyc/ relative to your working directory.
+All commands below MUST be run from the jyc/ directory (use `cd jyc` first).
+
 ## Critical Safety: Build/Deploy Operations
 CRITICAL: AI MUST use TWO-PHASE CONFIRMATION for ALL build/deploy operations:
 
@@ -22,10 +25,11 @@ CRITICAL: Never execute build/deploy commands without explicit user approval.
 MUST follow TWO-PHASE CONFIRMATION above before executing.
 MUST execute EXACTLY these commands in order:
 
-1. cargo test
-2. cargo build --release
-3. ./target/release/jyc --version
-4. Report: version, binary size, test results
+1. cd jyc
+2. cargo test
+3. cargo build --release
+4. ./target/release/jyc --version
+5. Report: version, binary size, test results
 
 CRITICAL: Do NOT improvise or use alternative build commands.
 
@@ -37,11 +41,11 @@ WARNING: Process will be killed and restarted automatically by deploy.sh.
 
 MUST execute EXACTLY these steps in order:
 
-Step 1: Verify target/release/jyc exists
+Step 1: Verify jyc/target/release/jyc exists
 Step 2: Send reply FIRST using reply_message tool — confirm deployment is starting and report build results
 Step 3: AFTER reply is sent, execute these deploy commands EXACTLY:
    ```
-   nohup ./deploy.sh &
+   cd jyc && nohup ./deploy.sh &
    ```
 Step 4: STOP immediately after running the deploy commands. Do NOT run any more commands.
 
@@ -55,8 +59,8 @@ CRITICAL Warnings:
 MUST follow TWO-PHASE CONFIRMATION above before executing.
 MUST execute EXACTLY these steps in order:
 
-1. Run Build steps above (test + compile)
-2. Run Deploy steps above (reply first, then cp + deploy.sh, then STOP)
+1. Run Build steps above (cd jyc, test + compile)
+2. Run Deploy steps above (reply first, then deploy.sh, then STOP)
 
 ## Service Management
 

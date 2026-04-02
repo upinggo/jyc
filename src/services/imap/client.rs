@@ -216,10 +216,23 @@ impl ImapClient {
     }
 
     /// Disconnect from the IMAP server.
+    ///
+    /// Attempts a clean IMAP LOGOUT with a short timeout. If the connection is
+    /// dead, just drops the session to avoid hanging on TCP retransmissions.
     pub async fn disconnect(&mut self) -> Result<()> {
         if let Some(mut session) = self.session.take() {
-            let _ = session.logout().await;
-            tracing::debug!("IMAP disconnected");
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                session.logout(),
+            ).await {
+                Ok(_) => {
+                    tracing::debug!("IMAP disconnected (clean logout)");
+                }
+                Err(_) => {
+                    tracing::warn!("IMAP logout timed out (5s), dropping connection");
+                    // Session is already taken from self.session, it will be dropped here
+                }
+            }
         }
         Ok(())
     }

@@ -502,9 +502,7 @@ impl OpenCodeClient {
                                     } else {
                                         model.clone()
                                     };
-                                    let m_value = format!("{}:{}", combined_model, mode_label);
-                                    tracing::Span::current().record("m", &m_value);
-                                    tracing::info!("AI model selected");
+                                    tracing::info!(model = %combined_model, "AI model selected");
                                 }
                             }
                             // Only update if new value is Some (don't overwrite with None)

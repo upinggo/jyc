@@ -1,9 +1,7 @@
-<!-- DEPRECATED: Use AGENTS.md + .opencode/skills/ instead.
-     Project context → copy agents.md.example to your thread workspace as AGENTS.md
-     Deploy skills → discovered automatically from jyc/.opencode/skills/ by OpenCode
-     See OpenCode docs: https://opencode.ai/docs/rules/ and https://opencode.ai/docs/skills/
--->
-You are developing the JYC project itself (bootstrapping) using systemd for process management.
+---
+name: jyc-deploy-bare
+description: Build and deploy jyc on bare metal using deploy.sh with nohup. Use when instructed to build, deploy, or build-and-deploy jyc.
+---
 
 ## Critical Safety: Build/Deploy Operations
 CRITICAL: AI MUST use TWO-PHASE CONFIRMATION for ALL build/deploy operations:
@@ -20,25 +18,6 @@ Phase 2 - Wait for Approval:
 
 CRITICAL: Never execute build/deploy commands without explicit user approval.
 
-## Repository
-The JYC git repository is at: ./jyc/
-
-## Git Rules
-- NEVER run `git config user.name` or `git config user.email` (local or global)
-- NEVER run `git config --global` for any setting
-
-## Development Workflow
-- Always create a feature branch: git checkout -b feat/<name>
-- After changes, run tests: cargo test
-- Commit with clear messages describing what changed and why
-- Push immediately after committing
-- Push and create PR when instructed
-
-## Build Environment
-- Build directly into target/ directory
-- Rust is expected to be installed on host system
-- Process supervision: systemd user service
-
 ## Build (when instructed)
 MUST follow TWO-PHASE CONFIRMATION above before executing.
 MUST execute EXACTLY these commands in order:
@@ -54,7 +33,7 @@ CRITICAL: Do NOT improvise or use alternative build commands.
 MUST follow TWO-PHASE CONFIRMATION above before executing.
 
 WARNING: Deploy causes JYC to restart. Your session will be interrupted.
-WARNING: Process will be killed by systemd and restarted automatically.
+WARNING: Process will be killed and restarted automatically by deploy.sh.
 
 MUST execute EXACTLY these steps in order:
 
@@ -70,18 +49,19 @@ Step 4: STOP immediately after running the deploy commands. Do NOT run any more 
 CRITICAL Warnings:
 - Do NOT send reply AFTER the deploy command — process will be dead and reply will fail
 - Do NOT run the deploy command multiple times — one restart is sufficient
-- Do NOT improvise or use alternative commands (e.g., do NOT use "systemctl --user stop jyc" or "systemctl --user start jyc" or any other variant)
+- Do NOT improvise or use alternative commands
+- Do NOT use "systemctl --user stop jyc" or "systemctl --user start jyc" or "systemctl --user restart jyc" directly — always use deploy.sh
 
 ## Build and Deploy (when instructed)
 MUST follow TWO-PHASE CONFIRMATION above before executing.
 MUST execute EXACTLY these steps in order:
 
 1. Run Build steps above (test + compile)
-2. Run Deploy steps above (reply first, then cp + restart, then STOP)
+2. Run Deploy steps above (reply first, then cp + deploy.sh, then STOP)
 
 ## Service Management
 
-You can query the jyc service with these commands:
+You can query the jyc service with these observation commands:
 
 ```bash
 # Check service status
@@ -91,14 +71,4 @@ systemctl --user status jyc
 journalctl --user -u jyc -f
 ```
 
-CRITICAL: Only use the restart command during deployment as specified in the "Deploy" section above.
-Do NOT use these commands for deployment:
-- systemctl --user restart jyc (use only in Deploy section as specified)
-- systemctl --user stop jyc
-- systemctl --user start jyc
-
-## References
-- See DESIGN.md for architecture
-- See CHANGELOG.md for version history
-- See IMPLEMENTATION.md for implementation phases
-- OpenCode Server API: https://opencode.ai/docs/server/
+CRITICAL: These are observation-only commands. For deployment, ALWAYS use deploy.sh as specified above.

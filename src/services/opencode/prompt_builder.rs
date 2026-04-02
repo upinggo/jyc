@@ -11,8 +11,10 @@ use crate::utils::constants::MAX_BODY_IN_PROMPT;
 /// - Configured system prompt (from agent config)
 /// - Security: directory boundary rules
 /// - Reply instructions (mode-specific: plan = text-only, build = use reply tool)
-/// - Optional thread-specific system.md
-pub async fn build_system_prompt(
+///
+/// Note: Project-specific instructions are handled by OpenCode's native
+/// AGENTS.md (rules) and SKILL.md (skills) discovery — not injected here.
+pub fn build_system_prompt(
     thread_path: &Path,
     config_system_prompt: Option<&str>,
     mode: Option<&str>,
@@ -64,27 +66,6 @@ When replying to a message, use the jiny_reply_reply_message tool:
 After a successful reply, STOP immediately. Do NOT call any other tools or perform further actions.
 CRITICAL: Always use jiny_reply_reply_message tool.
 "#,
-        );
-    }
-
-    // Thread-specific system.md
-    let system_md_path = thread_path.join("system.md");
-    if let Ok(content) = tokio::fs::read_to_string(&system_md_path).await {
-        let trimmed = content.trim();
-        if !trimmed.is_empty() {
-            tracing::info!(
-                path = %system_md_path.display(),
-                len = trimmed.len(),
-                "system.md loaded"
-            );
-            prompt.push('\n');
-            prompt.push_str(trimmed);
-            prompt.push('\n');
-        }
-    } else {
-        tracing::debug!(
-            path = %system_md_path.display(),
-            "No system.md found"
         );
     }
 
@@ -161,7 +142,7 @@ mod tests {
     #[tokio::test]
     async fn test_build_system_prompt() {
         let tmp = tempfile::tempdir().unwrap();
-        let prompt = build_system_prompt(tmp.path(), Some("Be helpful."), Some("build")).await;
+        let prompt = build_system_prompt(tmp.path(), Some("Be helpful."), Some("build"));
 
         assert!(prompt.contains("Be helpful."));
         assert!(prompt.contains("jiny_reply_reply_message"));
@@ -169,22 +150,23 @@ mod tests {
         assert!(prompt.contains("BUILD MODE"));
     }
 
-    #[tokio::test]
-    async fn test_build_system_prompt_with_system_md() {
+    #[test]
+    fn test_build_system_prompt_no_system_md() {
+        // system.md is no longer loaded by prompt_builder;
+        // OpenCode handles project instructions via AGENTS.md and skills natively.
         let tmp = tempfile::tempdir().unwrap();
-        tokio::fs::write(tmp.path().join("system.md"), "You are a code reviewer.")
-            .await
-            .unwrap();
+        std::fs::write(tmp.path().join("system.md"), "You are a code reviewer.").unwrap();
 
-        let prompt = build_system_prompt(tmp.path(), None, None).await;
-        assert!(prompt.contains("You are a code reviewer."));
+        let prompt = build_system_prompt(tmp.path(), None, None);
+        // system.md content should NOT appear in the system prompt
+        assert!(!prompt.contains("You are a code reviewer."));
         assert!(prompt.contains("BUILD MODE"));
     }
 
-    #[tokio::test]
-    async fn test_build_system_prompt_plan_mode() {
+    #[test]
+    fn test_build_system_prompt_plan_mode() {
         let tmp = tempfile::tempdir().unwrap();
-        let prompt = build_system_prompt(tmp.path(), Some("Be helpful."), Some("plan")).await;
+        let prompt = build_system_prompt(tmp.path(), Some("Be helpful."), Some("plan"));
 
         assert!(prompt.contains("Be helpful."));
         assert!(prompt.contains("PLAN MODE"));

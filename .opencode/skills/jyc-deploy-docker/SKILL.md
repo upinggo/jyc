@@ -1,9 +1,7 @@
-<!-- DEPRECATED: Use AGENTS.md + .opencode/skills/ instead.
-     Project context → copy agents.md.example to your thread workspace as AGENTS.md
-     Deploy skills → discovered automatically from jyc/.opencode/skills/ by OpenCode
-     See OpenCode docs: https://opencode.ai/docs/rules/ and https://opencode.ai/docs/skills/
--->
-You are developing the JYC project itself (bootstrapping).
+---
+name: jyc-deploy-docker
+description: Build and deploy jyc in Docker container using s6 process supervisor. Use when instructed to build, deploy, or build-and-deploy jyc.
+---
 
 ## Critical Safety: Build/Deploy Operations
 CRITICAL: AI MUST use TWO-PHASE CONFIRMATION for ALL build/deploy operations:
@@ -11,7 +9,7 @@ CRITICAL: AI MUST use TWO-PHASE CONFIRMATION for ALL build/deploy operations:
 Phase 1 - Present Plan:
 - List ALL commands that will be executed
 - Explain what each command does
-- State potential risks (e.g., "build will be 2-3 min", "deploy will restart the session")
+- State potential risks (e.g., "build will take 2-3 min", "deploy will restart the session")
 
 Phase 2 - Wait for Approval:
 - Ask the user to type "yes" or "proceed" to continue
@@ -20,25 +18,8 @@ Phase 2 - Wait for Approval:
 
 CRITICAL: Never execute build/deploy commands without explicit user approval.
 
-## Repository
-The JYC git repository is expected to be at: ./jyc/
-If not yet cloned: git clone https://github.com/kingye/jyc.git
-You can use an HTTP/HTTPS proxy if required: proxy.sha.sap.corp:8080
-Environment variable GH_TOKEN should be set if you need to push branches or create PRs on GitHub.
-
-## Git Rules
-- NEVER run `git config user.name` or `git config user.email` (local or global). The git identity is pre-configured by the container. Setting it locally will cause the wrong author on commits.
-- NEVER run `git config --global` for any setting. Global config is managed by the container's startup script.
-
-## Development Workflow
-- Always create a feature branch: git checkout -b feat/<name>
-- After changes, run tests: cd jyc && cargo test
-- Commit with clear messages describing what changed and why
-- Push immediately after committing (do not leave unpushed commits)
-- Push and create a PR when instructed
-
 ## Build Environment
-- The source is bind-mounted from the host (macOS) into the container (Linux)
+- The source is bind-mounted from the host into the container
 - CARGO_TARGET_DIR is set to /tmp/jyc-target to avoid cross-platform conflicts with the host's target/ directory
 - Do NOT build into ./target/ directly — always use the CARGO_TARGET_DIR environment variable (already set)
 - Rust is pre-installed in the dev image. If using the production image, install it on-demand:
@@ -83,9 +64,3 @@ MUST execute EXACTLY these steps in order:
 
 1. Run the Build steps above (test + compile)
 2. Run the Deploy steps above (reply first, then cp + restart, then STOP)
-
-## References
-- See jyc/DESIGN.md for architecture and component responsibilities
-- See jyc/CHANGELOG.md for version history
-- See jyc/IMPLEMENTATION.md for implementation phases
-- OpenCode Server API: https://opencode.ai/docs/server/

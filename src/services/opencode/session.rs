@@ -175,37 +175,13 @@ pub async fn ensure_thread_opencode_setup(
         model,
         small_model,
         permission: serde_json::json!({
-            "*": "allow",
             "question": "deny"
         }),
         agent: Some(serde_json::json!({
-            "plan": {
+            "build": {
                 "permission": {
-                    "edit": "deny",
-                    "write": "deny",
-                    "bash": {
-                        "*": "deny",
-                        "ls *": "allow",
-                        "cat *": "allow",
-                        "head *": "allow",
-                        "tail *": "allow",
-                        "find *": "allow",
-                        "grep *": "allow",
-                        "rg *": "allow",
-                        "git status*": "allow",
-                        "git log*": "allow",
-                        "git diff*": "allow",
-                        "git show*": "allow",
-                        "git branch*": "allow",
-                        "wc *": "allow",
-                        "file *": "allow",
-                        "stat *": "allow",
-                        "du *": "allow",
-                        "cargo test*": "allow",
-                        "cargo check*": "allow",
-                        "systemctl --user status*": "allow",
-                        "journalctl *": "allow"
-                    }
+                    "*": "allow",
+                    "question": "deny"
                 }
             }
         })),

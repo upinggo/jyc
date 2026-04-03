@@ -400,8 +400,9 @@ impl OpenCodeClient {
                             .collect::<Vec<_>>()
                             .join("");
                         if !preview.is_empty() {
-                            let truncated = if preview.len() > 200 {
-                                format!("{}...", &preview[..200])
+                            let truncated = if preview.chars().count() > 200 {
+                                let s: String = preview.chars().take(200).collect();
+                                format!("{}...", s)
                             } else {
                                 preview
                             };

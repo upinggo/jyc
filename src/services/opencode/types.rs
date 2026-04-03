@@ -42,6 +42,9 @@ pub struct PromptRequest {
     pub model: Option<ModelRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Tool overrides: set tool names to false to disable them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<std::collections::HashMap<String, bool>>,
     pub parts: Vec<PromptPart>,
 }
 

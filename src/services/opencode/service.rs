@@ -123,10 +123,12 @@ impl OpenCodeService {
 
         // Model and mode are passed per-prompt — no session restart needed for switches
         let model_ref = model.as_deref().and_then(ModelRef::from_combined);
+
         let request = PromptRequest {
             system: system_prompt,
             model: model_ref,
             agent: agent_mode,
+            tools: None,
             parts: vec![PromptPart::Text { text: user_prompt }],
         };
 

@@ -134,6 +134,8 @@ struct OpencodeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     small_model: Option<String>,
     permission: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent: Option<serde_json::Value>,
     mcp: serde_json::Value,
 }
 
@@ -176,6 +178,36 @@ pub async fn ensure_thread_opencode_setup(
             "*": "allow",
             "question": "deny"
         }),
+        agent: Some(serde_json::json!({
+            "plan": {
+                "permission": {
+                    "edit": "deny",
+                    "bash": {
+                        "*": "deny",
+                        "ls *": "allow",
+                        "cat *": "allow",
+                        "head *": "allow",
+                        "tail *": "allow",
+                        "find *": "allow",
+                        "grep *": "allow",
+                        "rg *": "allow",
+                        "git status*": "allow",
+                        "git log*": "allow",
+                        "git diff*": "allow",
+                        "git show*": "allow",
+                        "git branch*": "allow",
+                        "wc *": "allow",
+                        "file *": "allow",
+                        "stat *": "allow",
+                        "du *": "allow",
+                        "cargo test*": "allow",
+                        "cargo check*": "allow",
+                        "systemctl --user status*": "allow",
+                        "journalctl *": "allow"
+                    }
+                }
+            }
+        })),
         mcp: serde_json::json!({
             "jiny_reply": {
                 "type": "local",

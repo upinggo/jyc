@@ -432,6 +432,7 @@ impl OpenCodeClient {
                                     system: String::new(),
                                     model: None,
                                     agent: None,
+                                    tools: None,
                                     parts: vec![PromptPart::Text { text: cleaned_body.trim().to_string() }],
                                 };
 

@@ -21,10 +21,7 @@ pub struct SessionState {
 /// 1. Read `.jyc/opencode-session.json`
 /// 2. Verify session still exists via API
 /// 3. If missing → create new session
-pub async fn get_or_create_session(
-    client: &OpenCodeClient,
-    thread_path: &Path,
-) -> Result<String> {
+pub async fn get_or_create_session(client: &OpenCodeClient, thread_path: &Path) -> Result<String> {
     let state_path = thread_path.join(".jyc").join("opencode-session.json");
 
     // Try loading existing session
@@ -62,10 +59,7 @@ pub async fn get_or_create_session(
 }
 
 /// Create a fresh session for a thread.
-pub async fn create_new_session(
-    client: &OpenCodeClient,
-    thread_path: &Path,
-) -> Result<String> {
+pub async fn create_new_session(client: &OpenCodeClient, thread_path: &Path) -> Result<String> {
     let title = thread_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -151,12 +145,7 @@ pub async fn ensure_thread_opencode_setup(
     // Read model override
     let model = read_model_override(thread_path)
         .await
-        .or_else(|| {
-            agent_config
-                .opencode
-                .as_ref()
-                .and_then(|o| o.model.clone())
-        });
+        .or_else(|| agent_config.opencode.as_ref().and_then(|o| o.model.clone()));
 
     let small_model = if read_model_override(thread_path).await.is_some() {
         None // Model override disables small_model
@@ -175,16 +164,10 @@ pub async fn ensure_thread_opencode_setup(
         model,
         small_model,
         permission: serde_json::json!({
+            "*": "allow",
             "question": "deny"
         }),
-        agent: Some(serde_json::json!({
-            "build": {
-                "permission": {
-                    "*": "allow",
-                    "question": "deny"
-                }
-            }
-        })),
+        agent: None, // For simplicity, not configuring agent here
         mcp: serde_json::json!({
             "jiny_reply": {
                 "type": "local",
@@ -315,7 +298,9 @@ mod tests {
 
         assert!(!check_signal_file(&thread_path).await);
 
-        tokio::fs::write(jyc_dir.join("reply-sent.flag"), "{}").await.unwrap();
+        tokio::fs::write(jyc_dir.join("reply-sent.flag"), "{}")
+            .await
+            .unwrap();
         assert!(check_signal_file(&thread_path).await);
 
         cleanup_signal_file(&thread_path).await;

@@ -380,15 +380,33 @@ impl OpenCodeClient {
                             .as_deref()
                             .unwrap_or("generating");
 
+                        let output_len: usize = parts.values()
+                            .filter_map(|p| p.text.as_ref())
+                            .map(|t| t.len())
+                            .sum();
+
                         tracing::info!(
                             elapsed_secs = elapsed.as_secs(),
                             parts = parts.len(),
                             activity = %activity,
                             silence_secs = silence.as_secs(),
+                            output_len,
                             "Progress"
                         );
 
-                        // TODO: on_progress callback (Phase 6)
+                        let preview: String = parts.values()
+                            .filter_map(|p| p.text.as_ref())
+                            .map(|t| t.as_str())
+                            .collect::<Vec<_>>()
+                            .join("");
+                        if !preview.is_empty() {
+                            let truncated = if preview.len() > 200 {
+                                format!("{}...", &preview[..200])
+                            } else {
+                                preview
+                            };
+                            tracing::debug!(output = %truncated, "Current output preview");
+                        }
 
                         last_progress_log = Instant::now();
                     }

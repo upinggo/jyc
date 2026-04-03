@@ -135,7 +135,6 @@ impl OpenCodeService {
             system: system_prompt,
             model: model_ref,
             agent: agent_mode,
-            tools: None,
             parts: vec![PromptPart::Text { text: user_prompt }],
         };
 
@@ -223,6 +222,7 @@ impl OpenCodeService {
                 reply_text: None,
                 model_id: result.model_id,
                 provider_id: result.provider_id,
+                mode: result.mode,
             });
         }
 
@@ -244,12 +244,14 @@ impl OpenCodeService {
                 return Ok(GenerateReplyResult {
                     reply_sent_by_tool: true, reply_text: None,
                     model_id: retry.model_id, provider_id: retry.provider_id,
+                    mode: retry.mode,
                 });
             }
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: false,
                 reply_text: extract_text_from_parts(&retry.parts),
                 model_id: retry.model_id, provider_id: retry.provider_id,
+                mode: retry.mode,
             });
         }
 
@@ -259,6 +261,7 @@ impl OpenCodeService {
                 return Ok(GenerateReplyResult {
                     reply_sent_by_tool: true, reply_text: None,
                     model_id: result.model_id, provider_id: result.provider_id,
+                    mode: result.mode,
                 });
             }
             let timeout_message = "Process timed out. Please try again.";
@@ -269,6 +272,7 @@ impl OpenCodeService {
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: false, reply_text: Some(timeout_message.to_string()),
                 model_id: result.model_id, provider_id: result.provider_id,
+                mode: result.mode,
             });
         }
 
@@ -284,6 +288,7 @@ impl OpenCodeService {
             reply_text: Some(reply_text),
             model_id: result.model_id,
             provider_id: result.provider_id,
+            mode: result.mode,
         })
     }
 
@@ -308,7 +313,7 @@ impl OpenCodeService {
         if session::check_signal_file(thread_path).await {
             return Ok(GenerateReplyResult {
                 reply_sent_by_tool: true, reply_text: None,
-                model_id: None, provider_id: None,
+                model_id: None, provider_id: None, mode: None,
             });
         }
 
@@ -316,7 +321,7 @@ impl OpenCodeService {
         Ok(GenerateReplyResult {
             reply_sent_by_tool: false,
             reply_text: extract_text_from_parts(&parts),
-            model_id: None, provider_id: None,
+            model_id: None, provider_id: None, mode: None,
         })
     }
 }
@@ -353,6 +358,9 @@ struct GenerateReplyResult {
     model_id: Option<String>,
     #[allow(dead_code)]
     provider_id: Option<String>,
+    /// The actual mode OpenCode used (from SSE message.updated)
+    #[allow(dead_code)]
+    mode: Option<String>,
 }
 
 /// Extract text content from accumulated response parts.

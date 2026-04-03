@@ -331,6 +331,10 @@ impl OpenCodeClient {
                                             result.model_id.clone()
                                         };
                                         ctx.model = combined_model;
+                                        // Update mode with the real value from OpenCode
+                                        if result.mode.is_some() {
+                                            ctx.mode = result.mode.clone();
+                                        }
                                         crate::mcp::context::save_reply_context(directory, &ctx).await.ok();
                                     }
                                     model_updated = true;
@@ -432,7 +436,6 @@ impl OpenCodeClient {
                                     system: String::new(),
                                     model: None,
                                     agent: None,
-                                    tools: None,
                                     parts: vec![PromptPart::Text { text: cleaned_body.trim().to_string() }],
                                 };
 
@@ -512,6 +515,9 @@ impl OpenCodeClient {
                             }
                             if info.provider_id.is_some() {
                                 result.provider_id = info.provider_id.clone();
+                            }
+                            if info.mode.is_some() {
+                                result.mode = info.mode.clone();
                             }
                         }
                     }
@@ -760,6 +766,8 @@ pub struct SseResult {
     pub reply_sent_by_tool: bool,
     pub model_id: Option<String>,
     pub provider_id: Option<String>,
+    /// The actual mode OpenCode used (from SSE message.updated)
+    pub mode: Option<String>,
     pub error: Option<String>,
     pub error_message: Option<String>,
     pub timed_out: bool,

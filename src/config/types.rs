@@ -166,25 +166,6 @@ pub struct OpenCodeConfig {
     pub include_thread_history: bool,
 }
 
-/// Progress notification configuration.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ProgressConfig {
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// Delay before first progress update (seconds)
-    #[serde(default = "default_180")]
-    pub initial_delay_secs: u64,
-
-    /// Interval between progress updates (seconds)
-    #[serde(default = "default_180")]
-    pub interval_secs: u64,
-
-    /// Maximum number of progress updates per message
-    #[serde(default = "default_5")]
-    pub max_messages: usize,
-}
-
 /// Alerting configuration — error digests and health checks.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AlertingConfig {
@@ -251,9 +232,6 @@ fn default_30() -> u64 {
 }
 fn default_50() -> usize {
     50
-}
-fn default_180() -> u64 {
-    180
 }
 fn default_993() -> u16 {
     993

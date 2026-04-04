@@ -6,7 +6,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::core::thread_event_bus::{ThreadEventBus, ThreadEventBusRef, SimpleThreadEventBus};
+use crate::core::thread_event_bus::{ThreadEventBusRef, SimpleThreadEventBus};
 
 use crate::channels::email::outbound::EmailOutboundAdapter;
 use crate::channels::types::{AttachmentConfig, InboundMessage, PatternMatch};
@@ -122,7 +122,23 @@ impl ThreadManager {
 
         // Periodic cleanup: remove closed senders to prevent unbounded HashMap growth.
         // This is cheap (O(n) scan) and only retains senders that are still open.
-        queues.retain(|_name, sender| !sender.is_closed());
+        let mut closed_threads = Vec::new();
+        queues.retain(|name, sender| {
+            let is_open = !sender.is_closed();
+            if !is_open {
+                closed_threads.push(name.clone());
+            }
+            is_open
+        });
+        
+        // Clean up event buses for closed threads
+        if !closed_threads.is_empty() && self.enable_events {
+            let mut event_buses = self.event_buses.lock().await;
+            for thread_name in closed_threads {
+                event_buses.remove(&thread_name);
+                tracing::debug!(thread = %thread_name, "Cleaned up event bus for closed thread");
+            }
+        }
 
         let item = QueueItem {
             message,
@@ -142,6 +158,12 @@ impl ThreadManager {
                 }
                 Err(mpsc::error::TrySendError::Closed(item)) => {
                     queues.remove(&thread_name);
+                    // Clean up event bus for this thread
+                    if self.enable_events {
+                        let mut event_buses = self.event_buses.lock().await;
+                        event_buses.remove(&thread_name);
+                        tracing::debug!(thread = %thread_name, "Cleaned up event bus for closed queue");
+                    }
                     self.create_and_enqueue(&mut queues, thread_name, item).await;
                     return;
                 }
@@ -317,6 +339,11 @@ impl ThreadManager {
         {
             let mut queues = self.thread_queues.lock().await;
             queues.clear();
+        }
+        {
+            // Clear event buses
+            let mut event_buses = self.event_buses.lock().await;
+            event_buses.clear();
         }
         let mut handles = self.worker_handles.lock().await;
         for handle in handles.drain(..) {

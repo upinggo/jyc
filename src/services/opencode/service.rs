@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::Instrument;
 
@@ -108,6 +109,29 @@ impl OpenCodeService {
             progress: progress.to_string(),
             timestamp: Utc::now(),
         }).await;
+    }
+    
+    /// Check if a heartbeat should be sent based on elapsed time.
+    /// 
+    /// Returns true if enough time has passed since the last heartbeat
+    /// and minimum elapsed time has been reached.
+    fn should_send_heartbeat(
+        last_heartbeat_time: Option<Instant>,
+        elapsed_since_start: Duration,
+    ) -> bool {
+        // Don't send heartbeat if not enough time has passed since processing started
+        if elapsed_since_start < MIN_HEARTBEAT_ELAPSED {
+            return false;
+        }
+        
+        // If we've never sent a heartbeat, send one now
+        let last_heartbeat = match last_heartbeat_time {
+            Some(time) => time,
+            None => return true,
+        };
+        
+        // Check if enough time has passed since last heartbeat
+        last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL
     }
     
     /// Set the event bus for this agent.

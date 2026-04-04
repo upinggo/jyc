@@ -161,7 +161,14 @@ impl ThreadManager {
         let _ = tx.try_send(item);
         queues.insert(thread_name.clone(), tx);
 
-        let handle = self.spawn_worker(thread_name, rx);
+        // Create event bus for this thread if events are enabled
+        let event_bus = if self.enable_events {
+            self.get_or_create_event_bus(&thread_name).await
+        } else {
+            None
+        };
+
+        let handle = self.spawn_worker(thread_name, rx, event_bus);
 
         // Drain completed worker handles to prevent unbounded Vec growth.
         let mut handles = self.worker_handles.lock().await;
@@ -179,6 +186,7 @@ impl ThreadManager {
         &self,
         thread_name: String,
         mut rx: mpsc::Receiver<QueueItem>,
+        event_bus: Option<ThreadEventBusRef>,
     ) -> JoinHandle<()> {
         let semaphore = self.semaphore.clone();
         let cancel = self.cancel.clone();
@@ -197,6 +205,29 @@ impl ThreadManager {
             };
 
             tracing::info!("Worker started");
+
+            // Start event listener if event bus is provided
+            let event_listener_handle = if let Some(event_bus) = event_bus {
+                let outbound_clone = outbound.clone();
+                let thread_name_clone = thread_name.clone();
+                
+                Some(tokio::spawn(async move {
+                    let mut receiver = match event_bus.subscribe().await {
+                        Ok(receiver) => receiver,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to subscribe to event bus");
+                            return;
+                        }
+                    };
+                    
+                    while let Some(event) = receiver.recv().await {
+                        // Handle events (to be implemented in later steps)
+                        tracing::debug!(event = ?event, "Received thread event");
+                    }
+                }))
+            } else {
+                None
+            };
 
             loop {
                 let item = tokio::select! {
@@ -223,6 +254,12 @@ impl ThreadManager {
                         "Failed to process message"
                     );
                 }
+            }
+
+            // Wait for event listener to finish
+            if let Some(handle) = event_listener_handle {
+                let _ = handle.await;
+                tracing::debug!("Event listener finished");
             }
 
             tracing::info!("Worker finished");

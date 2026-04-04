@@ -141,6 +141,11 @@ mode = "opencode"
         assert_eq!(config.channels["work"].channel_type, "email");
         assert!(config.agent.enabled);
         assert_eq!(config.agent.mode, "opencode");
+        // Verify default session summary config
+        assert!(config.agent.summary.enabled);
+        assert_eq!(config.agent.summary.timeout_hours, 2.0);
+        assert_eq!(config.agent.summary.max_summaries, 50);
+        assert_eq!(config.agent.summary.storage_dir, ".jyc/session-summaries");
     }
 
     #[test]
@@ -171,5 +176,10 @@ mode = "opencode"
         let config = load_config_from_str(toml).unwrap();
         assert_eq!(config.general.max_concurrent_threads, 3);
         assert_eq!(config.general.max_queue_size_per_thread, 10);
+        // Verify default session summary config
+        assert!(config.agent.summary.enabled);
+        assert_eq!(config.agent.summary.timeout_hours, 2.0);
+        assert_eq!(config.agent.summary.max_summaries, 50);
+        assert_eq!(config.agent.summary.storage_dir, ".jyc/session-summaries");
     }
 }

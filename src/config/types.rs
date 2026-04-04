@@ -145,9 +145,6 @@ pub struct AgentConfig {
     /// OpenCode AI configuration
     pub opencode: Option<OpenCodeConfig>,
 
-    /// Progress update configuration
-    pub progress: Option<ProgressConfig>,
-
     /// Outbound attachment configuration
     pub attachments: Option<AttachmentConfig>,
 }

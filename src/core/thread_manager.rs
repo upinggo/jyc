@@ -66,7 +66,7 @@ pub struct ThreadManager {
 }
 
 impl ThreadManager {
-    /// Create a new ThreadManager with event support disabled (backward compatible).
+    /// Create a new ThreadManager with event support enabled by default.
     pub fn new(
         max_concurrent: usize,
         max_queue_size: usize,
@@ -82,7 +82,7 @@ impl ThreadManager {
             outbound,
             agent,
             cancel,
-            false, // enable_events: false for backward compatibility
+            true, // enable_events: true by default (Thread Event system)
         )
     }
     

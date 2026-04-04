@@ -179,16 +179,9 @@ pub trait OutboundAdapter: Send + Sync {
         body: &str,
     ) -> Result<SendResult>;
 
-    /// Send a progress update email (threaded with the original message).
-    async fn send_progress_update(
-        &self,
-        original: &InboundMessage,
-        elapsed_ms: u64,
-        activity: &str,
-    ) -> Result<SendResult>;
-
-    /// Send a heartbeat/progress update with more detailed information.
-    /// This is similar to send_progress_update but includes additional context.
+    /// Send a heartbeat/progress update with detailed information.
+    /// This is used by the Thread Event system to send periodic updates
+    /// during long-running AI processing (e.g., every 5 minutes).
     async fn send_heartbeat(
         &self,
         original: &InboundMessage,

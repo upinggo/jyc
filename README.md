@@ -46,6 +46,31 @@ JYC supports two deployment modes:
 
 Both support automatic restarts and AI self-bootstrapping (the AI can rebuild and redeploy JYC from source).
 
+## Supported Channels
+
+JYC is designed to be channel-agnostic. Currently implemented channels:
+
+### ✅ Email (IMAP/SMTP)
+- **Status:** Production ready
+- **Features:** Full email support with threading, attachments, and HTML formatting
+- **Protocols:** IMAP for inbound, SMTP for outbound
+- **Authentication:** TLS/SSL with username/password or OAuth2
+
+### ✅ Feishu (飞书/Lark)
+- **Status:** Production ready (implemented in Phase 7)
+- **Features:** Real-time messaging via WebSocket, rich message formatting
+- **API:** REST API with openlark SDK + WebSocket for real-time updates
+- **Authentication:** App credentials with automatic token refresh
+- **Formats:** Markdown, text, HTML, and rich interactive messages
+
+### 🔄 Future Channels (Planned)
+- **Slack:** WebHook and Socket Mode support
+- **Teams:** Microsoft Teams integration
+- **Discord:** Discord bot integration
+- **Custom:** WebHook API for custom integrations
+
+The channel-agnostic architecture makes it easy to add new channels by implementing the `InboundAdapter` and `OutboundAdapter` traits.
+
 ## Usage
 
 ### Email Commands

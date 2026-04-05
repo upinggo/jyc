@@ -88,27 +88,28 @@ impl crate::channels::types::OutboundAdapter for FeishuOutboundAdapter {
         })
     }
 
-    async fn send_progress_update(
+    async fn send_heartbeat(
         &self,
         original: &InboundMessage,
-        elapsed_ms: u64,
+        elapsed_secs: u64,
         activity: &str,
+        progress: &str,
     ) -> Result<SendResult> {
         // Ensure client is initialized
         self.client.initialize().await
-            .context("Failed to initialize Feishu client before sending progress update")?;
+            .context("Failed to initialize Feishu client before sending heartbeat")?;
         
         // Extract chat ID from original message
         let chat_id = original.channel_uid.as_str();
         
-        // Format progress update message
-        let progress_text = format!("⏳ {} ({}ms elapsed)", activity, elapsed_ms);
+        // Format heartbeat message
+        let heartbeat_text = format!("⏳ {} ({}s elapsed)\n\n{}", activity, elapsed_secs, progress);
         
-        // Send progress update using Feishu client
-        let result = self.client.send_text_message(chat_id, &progress_text).await
-            .context("Failed to send Feishu progress update")?;
+        // Send heartbeat using Feishu client
+        let result = self.client.send_text_message(chat_id, &heartbeat_text).await
+            .context("Failed to send Feishu heartbeat")?;
         
-        tracing::debug!("Feishu progress update sent to {}: {}", chat_id, activity);
+        tracing::debug!("Feishu heartbeat sent to {}: {}", chat_id, activity);
         
         Ok(SendResult {
             message_id: result.message_id,

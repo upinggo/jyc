@@ -169,7 +169,7 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
  5. **Thread Manager** — Per-thread mpsc queues with semaphore-bounded concurrency. Dispatches to agent services. Handles fallback send if agent returns text instead of sending via tool. Includes Thread Event system for heartbeat control.
  6. **OpenCode Service** — AI agent: server lifecycle, session management, prompt building, SSE streaming, error recovery. Returns `GenerateReplyResult` to the caller — does NOT send emails.
  7. **Thread Event Bus** — Thread-isolated event bus for publishing and subscribing to processing events (SSE → ThreadEvent conversion).
- 8. **Thread Event System** — Heartbeat rhythm control: monitors processing progress and sends periodic updates (every 5 minutes) via `send_heartbeat()`.
+ 8. **Thread Event System** — Heartbeat rhythm control: monitors processing progress and sends periodic updates (every 2 minutes) via `send_heartbeat()`.
  9. **Prompt Builder** — Builds channel-agnostic prompts from InboundMessage
 9. **MCP Reply Tool** — `reply_message` tool via `rmcp`, routes replies through OutboundAdapter
 10. **Message Storage** — Persist messages and replies as markdown files per thread
@@ -219,7 +219,7 @@ Each component has a single, clear responsibility. Data flows through the system
 
 **Thread Event System**
 - **Thread Event Bus** - Thread-isolated event bus for SSE → ThreadEvent conversion
-- **Heartbeat Control** - Sends periodic progress updates (every 5 minutes) during long AI operations
+- **Heartbeat Control** - Sends periodic progress updates (every 2 minutes) during long AI operations
 - **Thread Isolation** - Each thread has independent event bus and heartbeat state
 - **Event Types**:
   - `ProcessingStarted`, `ProcessingProgress`, `ProcessingCompleted`
@@ -229,8 +229,8 @@ Each component has a single, clear responsibility. Data flows through the system
   1. ✅ Current message being processed
   2. ✅ Processing state available (from `ProcessingProgress` events)
   3. ✅ Processing elapsed ≥ `MIN_HEARTBEAT_ELAPSED` (1 minute)
-  4. ✅ Time since last heartbeat ≥ `HEARTBEAT_INTERVAL` (5 minutes)
-- **Event Flow**: SSE events → OpenCode Client conversion → Thread Event Bus → Thread Manager monitoring → Heartbeat email via `send_heartbeat()`
+   4. ✅ Time since last heartbeat ≥ `HEARTBEAT_INTERVAL` (2 minutes)
+ - **Event Flow**: SSE events → OpenCode Client conversion → Thread Event Bus → Thread Manager monitoring → Heartbeat email via `send_heartbeat()`
 
 **Reply context** saved to `.jyc/reply-context.json` — the AI never sees it
 - Only 5 fields: `channel`, `threadName`, `incomingMessageDir`, `uid`, `_nonce`
@@ -748,7 +748,7 @@ impl ThreadManager {
   1. ✅ Current message being processed
   2. ✅ Processing state available (from `ProcessingProgress` events)
   3. ✅ Processing elapsed ≥ `MIN_HEARTBEAT_ELAPSED` (1 minute)
-  4. ✅ Time since last heartbeat ≥ `HEARTBEAT_INTERVAL` (5 minutes)
+   4. ✅ Time since last heartbeat ≥ `HEARTBEAT_INTERVAL` (2 minutes)
 - **Thread Isolation**: Each thread maintains independent event bus and heartbeat state
 
 ### IMAP Monitor: State Machine
@@ -1312,8 +1312,11 @@ JYC uses the following subset of the OpenCode server API:
 **Session lifecycle:**
 - Sessions are created on first use per thread and persisted in `.jyc/opencode-session.json`
 - Sessions are reused across messages, model switches, mode switches, and container restarts
-- Sessions are only deleted for error recovery (ContextOverflow, stale session detection)
-- On stale session detection: session file is deleted and a new session is created for retry
+- Sessions are deleted for error recovery (ContextOverflow, stale session detection)
+- Sessions are summarized when:
+  - Accumulated active time exceeds `timeout_hours` (default 2 hours), or
+  - Idle time exceeds `max_idle_hours` (default 120 hours) when active time is low
+- On session summary: session file is deleted and a new session is created for retry
 
 ### Context Management Strategy
 
@@ -1325,7 +1328,44 @@ The agent relies on OpenCode's built-in session memory for multi-turn conversati
    - Session is deleted on config change (model switch) or ContextOverflow
    - New session created on server restart
 
-2. **Incoming Message (Current)** — Latest message being processed
+2. **Session Summary System** — Automatic summarization of long-running sessions
+   - **Dual timeout conditions**:
+     - Active time timeout: Session accumulates active time (`total_active_time`) during AI processing
+     - When accumulated time exceeds `timeout_hours` (default 2h), session is summarized
+     - Idle time timeout: When session has low active time but idle for too long (`max_idle_hours`, default 120h)
+   - **Active time tracking**:
+     - `start_active_time_tracking()` called when AI processing begins
+     - `stop_active_time_tracking()` called when AI processing completes
+     - Active duration accumulated to `total_active_time` in session state
+   - **Summary generation**:
+     - Session summary saved as markdown file in `.jyc/session-summaries/`
+     - Includes session metadata, duration, message count, and trigger reason
+     - Old summaries cleaned up (keep latest `max_summaries` files)
+   - **System prompt integration**:
+     - When session summaries exist, system prompt includes notification
+     - AI can refer to previous session summaries for context continuity
+
+3. **Session State Data Structure** (`src/services/opencode/session.rs`)
+   ```rust
+   /// Per-thread session state, persisted in `.jyc/opencode-session.json`.
+   #[derive(Debug, Clone, Serialize, Deserialize)]
+   pub struct SessionState {
+       #[serde(rename = "sessionId")]
+       pub session_id: String,
+       #[serde(rename = "createdAt")]
+       pub created_at: String,
+       #[serde(rename = "lastUsedAt")]
+       pub last_used_at: String,
+       /// Total active time in seconds (accumulated over session lifetime)
+       #[serde(rename = "totalActiveTime", default)]
+       pub total_active_time: u64,
+       /// Timestamp when current active period started (if session is currently active)
+       #[serde(rename = "lastActiveStart", default, skip_serializing_if = "Option::is_none")]
+       pub last_active_start: Option<String>,
+   }
+   ```
+
+4. **Incoming Message (Current)** — Latest message being processed
    - Body stripped of quoted reply history (`strip_quoted_history()`)
    - Topic cleaned of repeated Reply/Fwd prefixes (at ingest time by InboundAdapter)
    - Limited to 2,000 chars
@@ -1653,6 +1693,13 @@ mode = "opencode"
 model = "SiliconFlow/Pro/zai-org/GLM-4.7"
 small_model = "SiliconFlow/Qwen/Qwen2.5-7B-Instruct"
 system_prompt = "You are an AI assistant. Respond professionally and concisely."
+
+[agent.summary]
+enabled = true
+timeout_hours = 2.0              # Maximum accumulated active time before summary (hours)
+max_idle_hours = 120.0           # Maximum idle time before summary when active time is low (hours)
+max_summaries = 50               # Maximum number of summary files to keep
+storage_dir = ".jyc/session-summaries"  # Directory to store summary files
 
 [agent.progress]
 enabled = true
@@ -2067,7 +2114,7 @@ alert: Alert service stopped
 | WARN | Recoverable issues: queue full, stale session, timeout, reconnection |
 | INFO | Lifecycle: message received, matched, processed, reply sent, worker start/stop, step start, tool calls |
 | DEBUG | SSE events, session status changes, step finish with costs, AI response text, config details |
-| TRACE | IMAP polling, mailbox select, heartbeat events |
+| TRACE | IMAP polling, mailbox select, skipping heartbeat notifications |
 
 ### Alert Service Integration
 
@@ -2321,7 +2368,7 @@ Publish to Thread's Event Bus
     ↓
 Thread Manager Event Listener
     ├── Receive events and update processing state
-    ├── Check heartbeat conditions based on HEARTBEAT_INTERVAL (5min)
+    ├── Check heartbeat conditions based on HEARTBEAT_INTERVAL (2min)
     ├── Send heartbeat email when conditions met
     └── Use send_heartbeat() with detailed progress information
     ↓
@@ -2348,7 +2395,7 @@ let mut receiver = event_bus.subscribe().await;
 
 #### Control Logic
 Heartbeat rhythm is controlled by Thread Manager based on:
-1. **HEARTBEAT_INTERVAL** (5 minutes) - Minimum interval between heartbeats
+1. **HEARTBEAT_INTERVAL** (2 minutes) - Minimum interval between heartbeats
 2. **MIN_HEARTBEAT_ELAPSED** (1 minute) - Minimum processing time before first heartbeat
 
 #### Heartbeat Conditions
@@ -2356,7 +2403,7 @@ Send heartbeat when ALL conditions are met:
 1. ✅ Current message being processed
 2. ✅ Processing state available (from `ProcessingProgress` events)
 3. ✅ Processing elapsed ≥ `MIN_HEARTBEAT_ELAPSED` (1 minute)
-4. ✅ Time since last heartbeat ≥ `HEARTBEAT_INTERVAL` (5 minutes)
+4. ✅ Time since last heartbeat ≥ `HEARTBEAT_INTERVAL` (2 minutes)
 
 #### Implementation
 ```rust
@@ -2422,8 +2469,8 @@ pub enum ThreadEvent {
 
 #### Heartbeat-related constants (`src/utils/constants.rs`)
 ```rust
-// Heartbeat interval (5 minutes)
-pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5 * 60);
+// Heartbeat interval (2 minutes)
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2 * 60);
 
 // Minimum elapsed time before sending first heartbeat (1 minute)
 pub const MIN_HEARTBEAT_ELAPSED: Duration = Duration::from_secs(60);

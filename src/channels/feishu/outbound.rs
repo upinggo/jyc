@@ -2,21 +2,23 @@
 //! 
 //! This module handles sending messages to Feishu via HTTP API.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 
+use crate::channels::feishu::client::FeishuClient;
+use crate::channels::feishu::config::FeishuConfig;
 use crate::channels::types::{InboundMessage, OutboundAttachment, SendResult};
 
 /// Feishu outbound adapter for sending messages via HTTP API.
 pub struct FeishuOutboundAdapter {
-    // TODO: Implement Feishu outbound adapter
+    client: FeishuClient,
 }
 
 impl FeishuOutboundAdapter {
     /// Create a new Feishu outbound adapter.
-    pub fn new() -> Self {
+    pub fn new(config: FeishuConfig) -> Self {
         Self {
-            // TODO: Initialize Feishu outbound adapter
+            client: FeishuClient::new(config),
         }
     }
 }
@@ -28,26 +30,37 @@ impl crate::channels::types::OutboundAdapter for FeishuOutboundAdapter {
     }
 
     async fn connect(&self) -> Result<()> {
-        // TODO: Implement Feishu API connection
-        tracing::info!("Feishu outbound adapter connected (placeholder)");
+        // Client initialization is lazy and will happen on first use
+        tracing::info!("Feishu outbound adapter connected");
         Ok(())
     }
 
     async fn disconnect(&self) -> Result<()> {
-        // TODO: Implement Feishu API disconnection
+        tracing::info!("Feishu outbound adapter disconnected");
         Ok(())
     }
 
     async fn send_reply(
         &self,
-        _original: &InboundMessage,
+        original: &InboundMessage,
         reply_text: &str,
         _attachments: Option<&[OutboundAttachment]>,
     ) -> Result<SendResult> {
-        // TODO: Implement sending reply to Feishu
-        tracing::info!("Feishu reply sent (placeholder): {}", reply_text);
+        // Ensure client is initialized
+        self.client.initialize().await
+            .context("Failed to initialize Feishu client before sending reply")?;
+        
+        // Extract chat ID from original message
+        let chat_id = original.channel_uid.as_str();
+        
+        // Send message using Feishu client
+        let result = self.client.send_text_message(chat_id, reply_text).await
+            .context("Failed to send Feishu reply")?;
+        
+        tracing::info!("Feishu reply sent to {}: {}", chat_id, &reply_text[..reply_text.len().min(50)]);
+        
         Ok(SendResult {
-            message_id: "placeholder".to_string(),
+            message_id: result.message_id,
         })
     }
 
@@ -55,25 +68,50 @@ impl crate::channels::types::OutboundAdapter for FeishuOutboundAdapter {
         &self,
         recipient: &str,
         subject: &str,
-        _body: &str,
+        body: &str,
     ) -> Result<SendResult> {
-        // TODO: Implement sending alert to Feishu
-        tracing::info!("Feishu alert sent (placeholder) to {}: {}", recipient, subject);
+        // Ensure client is initialized
+        self.client.initialize().await
+            .context("Failed to initialize Feishu client before sending alert")?;
+        
+        // Format alert message
+        let alert_text = format!("**{}**\n\n{}", subject, body);
+        
+        // Send alert using Feishu client
+        let result = self.client.send_text_message(recipient, &alert_text).await
+            .context("Failed to send Feishu alert")?;
+        
+        tracing::info!("Feishu alert sent to {}: {}", recipient, subject);
+        
         Ok(SendResult {
-            message_id: "placeholder".to_string(),
+            message_id: result.message_id,
         })
     }
 
     async fn send_progress_update(
         &self,
-        _original: &InboundMessage,
-        _elapsed_ms: u64,
-        _activity: &str,
+        original: &InboundMessage,
+        elapsed_ms: u64,
+        activity: &str,
     ) -> Result<SendResult> {
-        // TODO: Implement sending progress update to Feishu
-        tracing::info!("Feishu progress update sent (placeholder)");
+        // Ensure client is initialized
+        self.client.initialize().await
+            .context("Failed to initialize Feishu client before sending progress update")?;
+        
+        // Extract chat ID from original message
+        let chat_id = original.channel_uid.as_str();
+        
+        // Format progress update message
+        let progress_text = format!("⏳ {} ({}ms elapsed)", activity, elapsed_ms);
+        
+        // Send progress update using Feishu client
+        let result = self.client.send_text_message(chat_id, &progress_text).await
+            .context("Failed to send Feishu progress update")?;
+        
+        tracing::debug!("Feishu progress update sent to {}: {}", chat_id, activity);
+        
         Ok(SendResult {
-            message_id: "placeholder".to_string(),
+            message_id: result.message_id,
         })
     }
 }

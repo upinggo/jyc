@@ -58,6 +58,9 @@ pub struct ChannelConfig {
     /// SMTP configuration (for email channels)
     pub outbound: Option<SmtpConfig>,
 
+    /// Feishu configuration (for feishu channels)
+    pub feishu: Option<crate::channels::feishu::config::FeishuConfig>,
+
     /// Monitoring settings (IDLE vs poll, interval, etc.)
     pub monitor: Option<MonitorConfig>,
 

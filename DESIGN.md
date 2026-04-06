@@ -34,7 +34,7 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 │                  Inbound Channels (tokio tasks, run concurrently)        │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │
 │  │ Email Inbound│  │FeiShu Inbound│  │ Slack Inbound│ (future)         │
-│  │  (IMAP/TLS)  │  │  (WebHook)   │  │  (WebHook)   │                  │
+│  │  (IMAP/TLS)  │  │ (WebSocket)  │  │  (WebHook)   │                  │
 │  │              │  │              │  │              │                  │
 │  │ match_message│  │ match_message│  │ match_message│                  │
 │  │ derive_thread│  │ derive_thread│  │ derive_thread│                  │
@@ -85,7 +85,7 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 │  ┌─────────────────────────────────────────────────────┐                │
 │  │  • Thread-isolated event bus                        │                │
 │  │  • SSE → ThreadEvent conversion (OpenCode Client)   │                │
-│  │  • Heartbeat timer (5min interval)                  │                │
+│  │  Heartbeat timer (default 10min interval, configurable)│                │
 │  │  • Processing state tracking                        │                │
 │  └─────────────────────────────────────────────────────┘                │
 │                                                                          │
@@ -109,7 +109,7 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 │     - "static" → send configured text via OutboundAdapter                │
 │     - "opencode" → OpenCodeService::generate_reply(msg)                  │
 │  6. If agent returns fallback text → send via OutboundAdapter            │
-│  7. Event listener monitors progress and sends heartbeats (5min interval)│
+│  7. Event listener monitors progress and sends heartbeats (default 10min interval, configurable)│
 │  8. Worker picks next message from thread queue                          │
 └────────────────────────┬────────────────────────────────────────────────┘
                          │
@@ -131,18 +131,16 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 │     - Stale session → delete + retry                                     │
 │     - No tool used → return reply_text for fallback                      │
 │                                                                          │
-│  ┌─────────────────────────────────────────┐                            │
+│  ┌─────────────────────────────────────┐                            │
 │  │  MCP Tool: reply_message (subprocess)   │                            │
 │  │  Binary: jyc mcp-reply-tool             │                            │
 │  │  Transport: stdio (rmcp)                │                            │
 │  │                                         │                            │
 │  │  1. Decode reply-context.json (routing only)   │                            │
-│  │  2. Read received.md → full body        │                            │
-│  │  3. Build full reply (AI + quoted hst)  │                            │
-│  │  4. Instantiate OutboundAdapter         │                            │
-│  │  5. adapter.send_reply(full_reply_text) │                            │
-│  │  6. storage.store_reply(full_reply_text)│                            │
-│  │  7. Write signal file                   │                            │
+│  │  2. Write reply.md to disk              │                            │
+│  │  3. Write reply-sent.flag signal file   │                            │
+│  │  (Monitor reads reply.md + sends via    │                            │
+│  │   pre-warmed outbound adapter)          │                            │
 │  └─────────────────────────────────────────┘                            │
 └─────────────────────────────────────────────────────────────────────────┘
                       │
@@ -153,7 +151,6 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐               │
 │  │ Email Outbound│  │FeiShu Outbound│  │ Slack Outbound│ (future)      │
 │  │  (SMTP/TLS)   │  │  (API)        │  │  (API)        │               │
-│  │               │  │               │  │               │               │
 │  │ markdown→HTML │  │ format for    │  │ format for    │               │
 │  │ threading hdrs│  │ feishu msg    │  │ slack blocks  │               │
 │  └───────────────┘  └───────────────┘  └───────────────┘               │
@@ -162,16 +159,16 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 
 ### Components
 
-1. **Inbound Adapters** — Channel-specific message receivers (Email/IMAP, FeiShu/WebHook, etc.)
+1. **Inbound Adapters** — Channel-specific message receivers (Email/IMAP, FeiShu/WebSocket, etc.)
 2. **Outbound Adapters** — Channel-specific reply senders (Email/SMTP, FeiShu/API, etc.)
-3. **Channel Registry** — Lookup adapters by channel type (uses `Arc<dyn>` trait objects)
-4. **Message Router** — Delegates matching/naming to adapters, dispatches to thread queues
+3. **Channel Registry** — Lookup adapters by channel type (uses `Arc<dyn>` trait objects). Currently `#[allow(dead_code)]` / unused — ThreadManager uses `Arc<dyn OutboundAdapter>` directly.
+4. **Message Router** — Delegates matching/naming to `ChannelMatcher` trait, dispatches to thread queues. Channel-agnostic: `route(matcher: &dyn ChannelMatcher, ...)`
  5. **Thread Manager** — Per-thread mpsc queues with semaphore-bounded concurrency. Dispatches to agent services. Handles fallback send if agent returns text instead of sending via tool. Includes Thread Event system for heartbeat control.
  6. **OpenCode Service** — AI agent: server lifecycle, session management, prompt building, SSE streaming, error recovery. Returns `GenerateReplyResult` to the caller — does NOT send emails.
  7. **Thread Event Bus** — Thread-isolated event bus for publishing and subscribing to processing events (SSE → ThreadEvent conversion).
- 8. **Thread Event System** — Heartbeat rhythm control: monitors processing progress and sends periodic updates (every 2 minutes) via `send_heartbeat()`.
+ 8. **Thread Event System** — Heartbeat rhythm control: monitors processing progress and sends periodic updates (default every 10 minutes, configurable via `[heartbeat]` config section) via `send_heartbeat()`.
  9. **Prompt Builder** — Builds channel-agnostic prompts from InboundMessage
-9. **MCP Reply Tool** — `reply_message` tool via `rmcp`, routes replies through OutboundAdapter
+9. **MCP Reply Tool** — `reply_message` tool via `rmcp`, writes reply.md and signal file to disk. The monitor process (ThreadManager) reads reply.md and sends via the pre-warmed outbound adapter. This eliminates cold-start timeouts for Feishu API calls.
 10. **Message Storage** — Persist messages and replies as markdown files per thread
 11. **State Manager** — Track processed UIDs per channel, handle migrations
 12. **Security Module** — Path validation, file size/extension checks for attachments
@@ -214,12 +211,12 @@ Each component has a single, clear responsibility. Data flows through the system
 - Dumb transport: receives markdown, converts to HTML (via `comrak`), adds email headers, sends via `lettre`
 - Adds `Re:` to subject, sets `In-Reply-To` and `References` headers for threading
 - Does NOT build quoted history, does NOT clean or transform content
-- **Auto-reconnect**: wraps send with one-retry on connection errors containing "connect", "timeout", etc.
-- **Shared instance**: A single `SmtpClient` (via `EmailOutboundAdapter`) is created at monitor startup and shared across ThreadManager fallback, MCP reply tool (creates its own instance), and AlertService
+- **Structured error handling**: Uses lettre's structured SmtpError API for error classification: permanent errors (5xx) fail immediately, transient errors (4xx) retry with exponential backoff (3 attempts, 5-60s), connection/timeout errors reconnect with backoff (2 attempts).
+- **Shared instance**: A single `SmtpClient` (via `EmailOutboundAdapter`) is created at monitor startup and shared across ThreadManager fallback, monitor reply send path (when MCP tool writes reply.md), and AlertService
 
 **Thread Event System**
 - **Thread Event Bus** - Thread-isolated event bus for SSE → ThreadEvent conversion
-- **Heartbeat Control** - Sends periodic progress updates (every 2 minutes) during long AI operations
+- **Heartbeat Control** - Sends periodic progress updates (default every 10 minutes, configurable via `[heartbeat]` section) during long AI operations
 - **Thread Isolation** - Each thread has independent event bus and heartbeat state
 - **Event Types**:
   - `ProcessingStarted`, `ProcessingProgress`, `ProcessingCompleted`
@@ -228,9 +225,9 @@ Each component has a single, clear responsibility. Data flows through the system
 - **Heartbeat Conditions**:
   1. ✅ Current message being processed
   2. ✅ Processing state available (from `ProcessingProgress` events)
-  3. ✅ Processing elapsed ≥ `MIN_HEARTBEAT_ELAPSED` (1 minute)
-   4. ✅ Time since last heartbeat ≥ `HEARTBEAT_INTERVAL` (2 minutes)
- - **Event Flow**: SSE events → OpenCode Client conversion → Thread Event Bus → Thread Manager monitoring → Heartbeat email via `send_heartbeat()`
+  3. ✅ Processing elapsed ≥ `min_elapsed_secs` (default 1 minute)
+   4. ✅ Time since last heartbeat ≥ `interval_secs` (default 10 minutes)
+ - **Event Flow**: SSE events → OpenCode Client conversion → Thread Event Bus → Thread Manager monitoring → Heartbeat via `send_heartbeat()` (pre-formatted from per-channel template)
 
 **Reply context** saved to `.jyc/reply-context.json` — the AI never sees it
 - Only 5 fields: `channel`, `threadName`, `incomingMessageDir`, `uid`, `_nonce`
@@ -332,14 +329,14 @@ Email arrives
 - **InboundAdapter** is the only place where data is cleaned (subject + body)
 - **MessageStorage** stores data as-is (with full frontmatter metadata) — the authoritative source of message data
 - **PromptBuilder** strips quoted history from body for the AI prompt; does NOT include conversation history (OpenCode session memory handles that)
-- **`build_full_reply_text()`** is the single shared function for assembling the full reply (AI text + quoted history) — called by `EmailOutboundAdapter` and MCP reply tool, NOT by agents or ThreadManager
+- **`build_full_reply_text()`** is the single shared function for assembling the full reply (AI text + quoted history) — called by `EmailOutboundAdapter` and the monitor's reply send path, NOT by agents or ThreadManager
 - **SmtpClient** is a dumb transport: markdown→HTML + headers + attachments + send
 - **reply-context.json** is a minimal routing token (5 fields) — all message metadata comes from `received.md` frontmatter
  - **reply.md** = exactly what the recipient receives (minus HTML formatting)
 
 ## Feishu Channel Implementation
 
-The Feishu (飞书) channel implementation provides real-time messaging capabilities through the Lark/Feishu platform. Unlike email which uses IMAP/SMTP, Feishu uses a modern API-based approach with WebSocket support for real-time updates.
+The Feishu (飞书) channel implementation provides real-time messaging capabilities through the Lark/Feishu platform. Unlike email which uses IMAP/SMTP, Feishu uses a modern API-based approach with WebSocket for real-time message reception.
 
 ### Architecture Overview
 
@@ -361,16 +358,17 @@ The Feishu (飞书) channel implementation provides real-time messaging capabili
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐  │
 │  │             FeishuInboundAdapter                    │  │
-│  │  • WebSocket connection management                  │  │
-│  │  • Real-time message reception                      │  │
-│  │  • Message matching and thread derivation           │  │
+│  │  • LarkWsClient WebSocket connection management    │  │
+│  │  • Real-time message reception via WebSocket       │  │
+│  │  • Event parsing (im.message.receive_v1)           │  │
+│  │  • FeishuMatcher for matching and thread derivation│  │
 │  │  • Converts Feishu events to InboundMessage         │  │
 │  └─────────────────────────────────────────────────────┘  │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐  │
 │  │             FeishuOutboundAdapter                   │  │
-│  │  • Feishu API client (openlark SDK)                 │  │
-│  │  • Message sending with proper formatting           │  │
+│  │  • Feishu API client for message sending            │  │
+│  │  • Message formatting (markdown, text)              │  │
 │  │  • Heartbeat/progress updates                       │  │
 │  │  • Alert notifications                              │  │
 │  └─────────────────────────────────────────────────────┘  │
@@ -379,7 +377,16 @@ The Feishu (飞书) channel implementation provides real-time messaging capabili
 │  │                FeishuClient                         │  │
 │  │  • Authentication and token management              │  │
 │  │  • API request handling                             │  │
+│  │  • Name lookup: get_chat_name, get_user_name        │  │
+│  │    (with in-memory caching)                         │  │
 │  │  • Error handling and retry logic                   │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │              LarkWsClient                           │  │
+│  │  • WebSocket connection to Feishu platform          │  │
+│  │  • Automatic reconnection with exponential backoff  │  │
+│  │  • Event frame parsing and dispatch                 │  │
 │  └─────────────────────────────────────────────────────┘  │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐  │
@@ -393,31 +400,38 @@ The Feishu (飞书) channel implementation provides real-time messaging capabili
 
 ### Key Features Implemented
 
-1. **Real-time Message Reception** via WebSocket
-   - Automatic WebSocket connection management
-   - Reconnection logic with exponential backoff
+1. **Real-time Message Reception** via LarkWsClient WebSocket
+   - `LarkWsClient` manages WebSocket connection to Feishu platform
+   - Event frame parsing for `im.message.receive_v1` events
+   - Automatic reconnection with exponential backoff
    - Configurable WebSocket enable/disable
-   - Event parsing and validation
+   - JSON event body extraction and validation
 
-2. **API-based Message Sending** using openlark SDK
+2. **API-based Message Sending** via FeishuClient
    - Full support for Feishu message types
    - Proper authentication with app credentials
    - Rate limiting and error handling
-   - Support for attachments and rich content
+   - Support for rich content formatting
 
-3. **Multi-format Message Support**
+3. **Name Lookup with Caching**
+   - `get_chat_name()` resolves chat IDs to display names
+   - `get_user_name()` resolves user IDs to display names
+   - In-memory caching to reduce API calls
+   - Used by thread name derivation and message display
+
+4. **Multi-format Message Support**
    - Markdown formatting (primary)
    - Plain text fallback
    - HTML support for complex formatting
    - Automatic format detection and conversion
 
-4. **Thread Management**
+5. **Thread Management**
    - Thread name derivation from chat metadata
    - Message pattern matching for routing
    - Conversation context preservation
    - Cross-channel thread compatibility
 
-5. **Error Handling and Recovery**
+6. **Error Handling and Recovery**
    - Comprehensive FeishuError enum
    - Automatic token refresh on expiration
    - WebSocket reconnection on failure
@@ -488,7 +502,7 @@ Comprehensive unit tests cover:
 - Error handling and recovery
 - Message formatting and parsing
 
-All Feishu channel tests pass as part of the 115 total tests in the test suite.
+All Feishu channel tests pass as part of the 146 total tests in the test suite.
 
 ## Core Types & Traits
 
@@ -610,9 +624,7 @@ pub trait OutboundAdapter: Send + Sync {
     async fn send_heartbeat(
         &self,
         original: &InboundMessage,
-        elapsed_secs: u64,
-        activity: &str,
-        progress: &str,
+        message: &str,
     ) -> Result<SendResult>;
 }
 
@@ -667,10 +679,10 @@ pub struct SubjectRule {
 
 ### Thread Name Derivation
 
-Each inbound adapter implements `derive_thread_name()` with channel-specific logic:
+Each channel's `ChannelMatcher` implements `derive_thread_name(message, patterns, pattern_match)` with channel-specific logic:
 
 - **Email**: Strip reply prefixes (Re:, Fwd:, 回复:, 转发:), strip configured subject prefix (e.g., "Jiny:"), sanitize for filesystem. Supports broad separator recognition (`:`, `-`, `_`, `~`, `|`, `/`, `&`, `$`, etc.)
-- **FeiShu** (future): Derive from group name, topic, or message content
+- **FeiShu**: Derive from chat name (via `get_chat_name` with caching) or message content
 - **Slack** (future): Derive from channel name + thread topic
 
 ## Async Event Queue Architecture
@@ -692,7 +704,7 @@ JYC uses **Tokio** as its async runtime. The message processing pipeline is buil
      ┌────────────────┐ ┌────────────────┐ ┌────────────────┐
      │ tokio::spawn   │ │ tokio::spawn   │ │ tokio::spawn   │
      │ IMAP Monitor   │ │ FeiShu Monitor │ │ Alert Service  │
-     │ (channel: work)│ │ (future)       │ │ (flush timer)  │
+     │ (channel: work)│ │ (WebSocket)    │ │ (flush timer)  │
      └───────┬────────┘ └───────┬────────┘ └────────────────┘
              │                  │
              ▼                  ▼
@@ -755,6 +767,9 @@ pub struct ThreadManager {
     /// Heartbeat configuration (configurable via [heartbeat] config section)
     heartbeat_config: HeartbeatConfig,
 
+    /// Per-channel heartbeat message template
+    heartbeat_template: String,
+
     /// Graceful shutdown (child token — cancelling this does NOT cancel other channels)
     cancel: CancellationToken,
 
@@ -806,7 +821,7 @@ impl ThreadManager {
     ) -> JoinHandle<()> {
         let semaphore = self.semaphore.clone();
         let cancel = self.cancel.clone();
-        let opencode = self.opencode.clone();
+        let agent = self.agent.clone();
         let storage = self.storage.clone();
         // ... clone other Arc deps ...
 
@@ -879,7 +894,7 @@ impl ThreadManager {
 - **Back-pressure**: `mpsc::channel(10)` — `try_send` fails when queue is full (message dropped)
 - **Graceful shutdown**: `CancellationToken` propagates to all workers and monitors
 - **Automatic cleanup**: Worker tasks exit when their mpsc channel closes (all senders dropped) or on cancellation. Semaphore permits are released on `_permit` drop.
-- **Thread Event System**: Each thread has isolated event bus and heartbeat control (5-minute intervals)
+- **Thread Event System**: Each thread has isolated event bus and heartbeat control (default 10-minute intervals, configurable via `[heartbeat]` section)
 
 **Thread Event System Integration:**
 - **Event Listener with Heartbeat Control**:
@@ -887,11 +902,15 @@ impl ThreadManager {
   async fn event_listener_with_heartbeat(
       event_bus: ThreadEventBusRef,
       thread_name: String,
-      outbound: Arc<EmailOutboundAdapter>,
+      outbound: Arc<dyn OutboundAdapter>,
+      heartbeat_config: HeartbeatConfig,
+      heartbeat_template: String,
       current_message_rx: watch::Receiver<Option<InboundMessage>>,
   ) {
       let mut receiver = event_bus.subscribe().await;
-      let mut heartbeat_timer = tokio::time::interval(HEARTBEAT_INTERVAL);
+      let interval = Duration::from_secs(heartbeat_config.interval_secs);
+      let min_elapsed = Duration::from_secs(heartbeat_config.min_elapsed_secs);
+      let mut heartbeat_timer = tokio::time::interval(interval);
       let mut last_heartbeat_sent: Option<Instant> = None;
       let mut last_processing_state: Option<(u64, String, String)> = None;
       
@@ -906,14 +925,15 @@ impl ThreadManager {
               _ = heartbeat_timer.tick() => {
                   // Check heartbeat conditions and send if met
                   if let Some(message) = current_message_rx.borrow().clone() {
-                      if let Some((elapsed_secs, activity, progress)) = &last_processing_state {
-                          if Duration::from_secs(*elapsed_secs) >= MIN_HEARTBEAT_ELAPSED {
+                      if let Some((elapsed_secs, ref activity, ref progress)) = last_processing_state {
+                          if Duration::from_secs(elapsed_secs) >= min_elapsed {
                               let should_send = match last_heartbeat_sent {
-                                  Some(last_sent) => last_sent.elapsed() >= HEARTBEAT_INTERVAL,
+                                  Some(last_sent) => last_sent.elapsed() >= interval,
                                   None => true,
                               };
                               if should_send {
-                                  outbound.send_heartbeat(&message, *elapsed_secs, activity, progress).await;
+                                  let formatted = format_heartbeat(&heartbeat_template, elapsed_secs, activity, progress);
+                                  outbound.send_heartbeat(&message, &formatted).await;
                                   last_heartbeat_sent = Some(Instant::now());
                               }
                           }
@@ -927,8 +947,8 @@ impl ThreadManager {
 - **Heartbeat Conditions**:
   1. ✅ Current message being processed
   2. ✅ Processing state available (from `ProcessingProgress` events)
-  3. ✅ Processing elapsed ≥ `MIN_HEARTBEAT_ELAPSED` (1 minute)
-   4. ✅ Time since last heartbeat ≥ `HEARTBEAT_INTERVAL` (2 minutes)
+  3. ✅ Processing elapsed ≥ `min_elapsed_secs` (default 1 minute)
+   4. ✅ Time since last heartbeat ≥ `interval_secs` (default 10 minutes)
 - **Thread Isolation**: Each thread maintains independent event bus and heartbeat state
 
 ### IMAP Monitor: State Machine
@@ -1345,7 +1365,7 @@ JYC uses the following subset of the OpenCode server API:
 
 **Per-thread configuration:**
 - Each thread gets its own `opencode.json` with model settings, MCP tool config, and permissions
-- `permission: { "*": "allow", "question": "deny" }` — headless mode, no interactive terminal
+- `permission: { "*": "allow", "question": "deny", "external_directory": "deny" }` — headless mode, no interactive terminal, no access outside thread directory
 - Staleness check detects changes → rewrites config → restarts server
 - Model and mode are passed per-prompt via `PromptRequest.model` and `PromptRequest.agent` — no session restart needed for switches
 
@@ -1443,6 +1463,10 @@ JYC uses the following subset of the OpenCode server API:
 │  3. Get or create session (.jyc/opencode-session.json)
 │  4. Clean up stale signal file
 │  5. Build system prompt (config + directory boundaries + system.md)
+│     BUILD MODE prompt categorizes incoming messages:
+│       - Information questions → use bash curl directly
+│       - Coding tasks → use tools to edit files
+│       - General conversation → reply from knowledge
 │  6. Build user prompt (stripped body )
 │  7. Check mode override (plan/build from .jyc/mode-override)
 │         ↓
@@ -1464,12 +1488,15 @@ JYC uses the following subset of the OpenCode server API:
 │  MCP Tool (jyc mcp-reply-tool subprocess):
 │    1. Decode reply-context.json → get channel name + message directory
 │    2. Load config from JYC_ROOT/config.toml
-│    3. Instantiate OutboundAdapter for context.channel
-│    4. Read received.md for full body
-│    5. Build full_reply_text = AI reply + prepare_body_for_quoting()
-│    6. adapter.send_reply(original_message, full_reply_text, attachments)
-│    7. MessageStorage::store_reply(full_reply_text) → reply.md
-│    8. Write .jyc/reply-sent.flag (signal file)
+│    3. Read received.md for full body
+│    4. Write reply.md to disk (AI reply text)
+│    5. Write .jyc/reply-sent.flag (signal file)
+│         ↓
+│  Monitor detects signal file:
+│    1. Read reply.md
+│    2. Build full_reply_text = AI reply + build_full_reply_text() (quoted history)
+│    3. Send via pre-warmed outbound adapter (eliminates cold-start timeouts)
+│    4. MessageStorage::store_reply(full_reply_text) → reply.md (updated)
 │         ↓
 │  Handle result → return GenerateReplyResult:
 │    - reply_sent_by_tool: true (SSE tool detection OR signal file) → done
@@ -1592,9 +1619,9 @@ Thread files still provide recent conversation context
 `build_full_reply_text()` (`src/core/email_parser.rs`) is the **single shared function** for assembling a complete reply email. It is called by:
 
 1. **EmailOutboundAdapter::send_reply()** — the outbound adapter calls it internally when formatting replies (both fallback and command results)
-2. **MCP reply tool** — when the AI calls `reply_message` (the tool creates its own `EmailOutboundAdapter` which calls it)
+2. **Monitor reply send path** — when the MCP tool writes reply.md and signal file, the monitor reads reply.md and calls `send_reply()` on the pre-warmed outbound adapter (which calls `build_full_reply_text()`)
 
-This ensures all reply emails have the same format regardless of the send path. The agent (OpenCodeService/StaticAgentService) never calls this function — it's a channel-specific concern owned by the outbound adapter.
+This ensures all reply emails have the same format regardless of the send path. The MCP reply tool no longer sends messages directly — it only writes reply.md and signal file to disk. The agent (OpenCodeService/StaticAgentService) never calls this function — it's a channel-specific concern owned by the outbound adapter.
 
 **Reply format:**
 ```
@@ -1748,13 +1775,11 @@ MCP Server (rmcp, stdio transport, cwd = thread dir):
   2. Load config from JYC_ROOT/config.toml
   3. Read received.md frontmatter → sender_address, topic, external_id, thread_refs
   4. Validate attachments (exclude .opencode/, .jyc/)
-  5. Build full reply: AI reply text + build_full_reply_text() (quoted history)
-  6. Instantiate OutboundAdapter for channel → send reply with attachments
-  7. MessageStorage::store_reply() → reply.md
-  8. Write .jyc/reply-sent.flag (signal file)
-   9. Write .jyc/reply-sent.flag (signal file)
-   9. Return success message
-   (Context file persists for multiple replies in same thread)
+  5. Write reply.md to disk (AI reply text)
+  6. Write .jyc/reply-sent.flag (signal file)
+  7. Return success message
+  (Monitor process reads reply.md and sends via pre-warmed outbound adapter.
+   This eliminates cold-start timeouts for Feishu API calls.)
 ```
 
 ### Historical Message Quoting (Thread Trail)
@@ -1772,6 +1797,7 @@ MCP Server (rmcp, stdio transport, cwd = thread dir):
   ...
   ```
 - **Stripped bodies**: Received messages stripped of quoted history via `strip_quoted_history()`. Reply messages parsed with `parse_stored_reply()` to extract only the AI's response text.
+- **Per-entry truncation**: Each quoted history entry is capped at 1024 characters (`MAX_QUOTED_BODY_CHARS`)
 - **Limit**: `MAX_HISTORY_QUOTE = 6` entries for reply email quoted history
 - **Timestamp format**: `YYYY-MM-DD HH:MM` in both quoted history headers and prompt context
 
@@ -1786,7 +1812,8 @@ Written by `ensure_thread_opencode_setup()` in each thread directory:
   "small_model": "SiliconFlow/Qwen/Qwen2.5-7B-Instruct",
   "permission": {
     "*": "allow",
-    "question": "deny"
+    "question": "deny",
+    "external_directory": "deny"
   },
   "mcp": {
     "jiny_reply": {
@@ -1805,7 +1832,7 @@ Written by `ensure_thread_opencode_setup()` in each thread directory:
 2. Return `["/path/to/jyc", "mcp-reply-tool"]`
 3. Fallback: check common paths `/usr/local/bin/jyc`, `/usr/bin/jyc`
 
-**Staleness check**: Rewrites `opencode.json` if model, tool path, JYC_ROOT, or `permission.question` changed. Session is NOT deleted — model and mode are passed per-prompt.
+**Staleness check**: Rewrites `opencode.json` if model, tool path, JYC_ROOT, or permissions changed. Session is NOT deleted — model and mode are passed per-prompt.
 
 ## Configuration (TOML)
 
@@ -1824,7 +1851,6 @@ max_queue_size_per_thread = 10
 
 [channels.work]
 type = "email"
-workspace = "./workspace"
 
 [channels.work.inbound]
 host = "imap.company.com"
@@ -1886,6 +1912,13 @@ enabled = true
 max_file_size = "10mb"
 allowed_extensions = [".ppt", ".pptx", ".doc", ".docx", ".txt", ".md"]
 
+# --- Heartbeat ---
+
+[heartbeat]
+enabled = true
+interval_secs = 600                # Default: 10 minutes (avoids SMTP rate limits)
+min_elapsed_secs = 60              # Default: 1 minute before first heartbeat
+
 # --- Alerting ---
 
 [alerting]
@@ -1910,6 +1943,7 @@ pub struct AppConfig {
     pub general: GeneralConfig,
     pub channels: HashMap<String, ChannelConfig>,
     pub agent: AgentConfig,
+    pub heartbeat: Option<HeartbeatConfig>,
     pub alerting: Option<AlertingConfig>,
 }
 
@@ -1925,12 +1959,12 @@ pub struct GeneralConfig {
 pub struct ChannelConfig {
     #[serde(rename = "type")]
     pub channel_type: String,
-    pub workspace: Option<String>,
     pub inbound: Option<ImapConfig>,
     pub outbound: Option<SmtpConfig>,
     pub monitor: Option<MonitorConfig>,
     pub patterns: Option<Vec<ChannelPattern>>,
     pub agent: Option<AgentConfig>,           // Channel-specific override
+    pub heartbeat_template: Option<String>,   // Per-channel heartbeat message template
 }
 
 #[derive(Debug, Deserialize)]
@@ -2067,7 +2101,7 @@ Each channel manages its own state independently. For email, state tracks IMAP s
 │   ├── .imap/
 │   │   ├── .state.json                  # IMAP monitor state
 │   │   └── .processed-uids.txt         # One UID per line, append-only
-│   └── workspace/                       # Thread workspaces
+│   └── workspace/                       # Thread workspaces (hardcoded: <workdir>/<channel_name>/workspace/)
 │       ├── <thread-dir-1>/              # OpenCode cwd for this thread
 │       │   ├── messages/
 │       │   │   ├── 2026-03-19_23-02-20/
@@ -2079,6 +2113,7 @@ Each channel manages its own state independently. For email, state tracks IMAP s
 │       │   │       └── reply.md
 │       │   ├── .jyc/
 │       │   │   ├── opencode-session.json         # AI session state
+│       │   │   ├── reply-context.json   # Reply routing context (disk-based)
 │       │   │   ├── reply-tool.log       # MCP tool log
 │       │   │   ├── reply-sent.flag      # Signal file (transient)
 │       │   │   ├── model-override       # /model command override
@@ -2116,11 +2151,21 @@ jyc/
 │   │   ├── mod.rs
 │   │   ├── types.rs                     # InboundMessage, traits, patterns
 │   │   ├── registry.rs                  # ChannelRegistry
-│   │   └── email/
+│   │   ├── email/
+│   │   │   ├── mod.rs
+│   │   │   ├── config.rs               # Email-specific config
+│   │   │   ├── inbound.rs              # EmailInboundAdapter
+│   │   │   └── outbound.rs             # EmailOutboundAdapter
+│   │   └── feishu/
 │   │       ├── mod.rs
-│   │       ├── config.rs               # Email-specific config
-│   │       ├── inbound.rs              # EmailInboundAdapter
-│   │       └── outbound.rs             # EmailOutboundAdapter
+│   │       ├── client.rs               # Feishu API client (auth, token mgmt)
+│   │       ├── config.rs               # Feishu-specific config
+│   │       ├── inbound.rs              # FeishuInboundAdapter (WebSocket)
+│   │       ├── outbound.rs             # FeishuOutboundAdapter (API)
+│   │       ├── websocket.rs            # LarkWsClient (WebSocket connection)
+│   │       ├── types.rs                # Feishu event/message types
+│   │       ├── formatter.rs            # Message formatting (markdown/text)
+│   │       └── validator.rs            # Config & message validation
 │   ├── core/
 │   │   ├── mod.rs
 │   │   ├── thread_manager.rs           # Per-thread queues + semaphore
@@ -2129,7 +2174,6 @@ jyc/
 │   │   ├── email_parser.rs             # Stripping, quoting, thread trail
 │   │   ├── state_manager.rs            # UID tracking, state persistence
 │   │   ├── alert_service.rs            # Error digests + health reports
-│   │   ├── progress_tracker.rs         # Progress update emails
 │   │   └── command/
 │   │       ├── mod.rs
 │   │       ├── registry.rs             # Command parsing + dispatch
@@ -2252,7 +2296,7 @@ INFO worker{channel=jiny283, thread=weather}: Session idle — prompt complete
 cli/monitor.rs:
   tokio::spawn(async { ... }.instrument(info_span!("inbound", channel = %ch)))
     → imap/monitor.rs: start() — all logs inherit inbound{channel}
-      → message_router.rs: route_email() — inherits inbound{channel}
+      → message_router.rs: route() — inherits inbound{channel}
         → thread_manager.rs: enqueue() — creates new worker span
 
   tokio::spawn(async { ... }.instrument(info_span!("worker", channel, thread)))
@@ -2494,7 +2538,7 @@ Configurable per pattern via `attachments` in the pattern config.
 - Path validation for all file operations (`PathValidator`)
 - Attachment security: extension allowlist, size limit, filename sanitization
 - MCP tool: validate context before processing
-- `permission: { "*": "allow", "question": "deny" }` in opencode.json
+- `permission: { "*": "allow", "question": "deny", "external_directory": "deny" }` in opencode.json
 - Rust's ownership model eliminates data races, use-after-free, and buffer overflows
 - `system.md` per-thread customization — file permissions should restrict who can modify thread directories
 
@@ -2537,7 +2581,7 @@ The Thread Event System is a core component for handling inter-thread event comm
 1. **OpenCode Client** - SSE event conversion layer
 2. **Thread Event Bus** - Thread-isolated event bus (publish/subscribe)
 3. **Thread Manager** - Event listening and heartbeat control layer
-4. **Outbound Adapter** - Heartbeat message sending layer (`send_heartbeat()`)
+4. **Outbound Adapter** - Heartbeat message sending layer (`send_heartbeat()` — pre-formatted from per-channel template)
 
 #### Data Flow
 ```
@@ -2553,9 +2597,10 @@ Publish to Thread's Event Bus
     ↓
 Thread Manager Event Listener
     ├── Receive events and update processing state
-    ├── Check heartbeat conditions based on HEARTBEAT_INTERVAL (2min)
-    ├── Send heartbeat email when conditions met
-    └── Use send_heartbeat() with detailed progress information
+    ├── Check heartbeat conditions based on configurable interval (default 10min)
+    ├── Format heartbeat message from per-channel template
+    ├── Send heartbeat when conditions met
+    └── Use send_heartbeat() with pre-formatted message
     ↓
 User receives heartbeat email
 ```
@@ -2579,36 +2624,39 @@ let mut receiver = event_bus.subscribe().await;
 ### Heartbeat Rhythm Control
 
 #### Control Logic
-Heartbeat rhythm is controlled by Thread Manager based on:
-1. **HEARTBEAT_INTERVAL** (2 minutes) - Minimum interval between heartbeats
-2. **MIN_HEARTBEAT_ELAPSED** (1 minute) - Minimum processing time before first heartbeat
+Heartbeat rhythm is controlled by Thread Manager based on configurable `HeartbeatConfig`:
+1. **interval_secs** (default 10 minutes) - Minimum interval between heartbeats
+2. **min_elapsed_secs** (default 1 minute) - Minimum processing time before first heartbeat
 
 #### Heartbeat Conditions
 Send heartbeat when ALL conditions are met:
 1. ✅ Current message being processed
 2. ✅ Processing state available (from `ProcessingProgress` events)
-3. ✅ Processing elapsed ≥ `MIN_HEARTBEAT_ELAPSED` (1 minute)
-4. ✅ Time since last heartbeat ≥ `HEARTBEAT_INTERVAL` (2 minutes)
+3. ✅ Processing elapsed ≥ `min_elapsed_secs` (default 1 minute)
+4. ✅ Time since last heartbeat ≥ `interval_secs` (default 10 minutes)
 
 #### Implementation
 ```rust
 // In event_listener_with_heartbeat function
-let mut heartbeat_timer = tokio::time::interval(HEARTBEAT_INTERVAL);
+let interval = Duration::from_secs(heartbeat_config.interval_secs);
+let min_elapsed = Duration::from_secs(heartbeat_config.min_elapsed_secs);
+let mut heartbeat_timer = tokio::time::interval(interval);
 
 // Timer tick - check if we should send heartbeat
 _ = heartbeat_timer.tick() => {
     if let Some(message) = current_message {
         if let Some((elapsed_secs, activity, progress)) = &last_processing_state {
             let processing_elapsed = Duration::from_secs(*elapsed_secs);
-            if processing_elapsed >= MIN_HEARTBEAT_ELAPSED {
+            if processing_elapsed >= min_elapsed {
                 // Check heartbeat interval
                 let should_send = match last_heartbeat_sent {
-                    Some(last_sent) => last_sent.elapsed() >= HEARTBEAT_INTERVAL,
+                    Some(last_sent) => last_sent.elapsed() >= interval,
                     None => true, // First heartbeat
                 };
                 
                 if should_send {
-                    outbound.send_heartbeat(&message, *elapsed_secs, activity, progress).await;
+                    let formatted = format_heartbeat(&heartbeat_template, *elapsed_secs, activity, progress);
+                    outbound.send_heartbeat(&message, &formatted).await;
                 }
             }
         }
@@ -2621,12 +2669,10 @@ _ = heartbeat_timer.tick() => {
 #### Event Enumeration
 ```rust
 pub enum ThreadEvent {
-    // Heartbeat event (controlled by Thread Manager)
+    // Heartbeat event (controlled by Thread Manager, pre-formatted message)
     Heartbeat {
         thread_name: String,
-        elapsed_secs: u64,
-        activity: String,
-        progress: String,
+        message: String,
         timestamp: DateTime<Utc>,
     },
     
@@ -2650,21 +2696,24 @@ pub enum ThreadEvent {
 | ToolStarted/Completed | OpenCode Client | Tool start/complete events |
 | Heartbeat | Thread Manager | Periodic heartbeat, user notification |
 
-### Configuration Constants
+### Configuration
 
-#### Heartbeat-related constants (`src/utils/constants.rs`)
+#### HeartbeatConfig (configurable via `[heartbeat]` TOML section)
 ```rust
-// Heartbeat interval (2 minutes)
-pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2 * 60);
-
-// Minimum elapsed time before sending first heartbeat (1 minute)
-pub const MIN_HEARTBEAT_ELAPSED: Duration = Duration::from_secs(60);
+/// Heartbeat timing configuration
+pub struct HeartbeatConfig {
+    pub enabled: bool,           // default: true
+    pub interval_secs: u64,      // default: 600 (10 minutes, to avoid SMTP rate limits)
+    pub min_elapsed_secs: u64,   // default: 60 (1 minute)
+}
 
 // Minimum interval between heartbeats to avoid flooding (30 seconds)
 pub const MIN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 ```
 
-#### Thread Manager Configuration
+Per-channel heartbeat message template is configured via `heartbeat_template` field on `ChannelConfig`.
+
+#### Thread Manager Initialization
 ```rust
 // Enable Thread Event system by default
 let thread_manager = ThreadManager::new_with_options(
@@ -2673,7 +2722,9 @@ let thread_manager = ThreadManager::new_with_options(
     storage,
     outbound,
     agent,
-    cancel,
+    heartbeat_config,
+    heartbeat_template,
+    cancel.child_token(), // child token — prevents cascade shutdown
     true, // enable_events: true (Thread Event system)
 );
 ```

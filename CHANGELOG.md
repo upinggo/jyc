@@ -2,6 +2,16 @@
 
 All notable changes to JYC will be documented in this file.
 
+## [0.1.1] - 2026-04-06
+
+### Changed
+
+**Feishu Message Format Enhancement**
+- Changed Feishu message sending from plain text (`msg_type: "text"`) to interactive cards with native markdown support (`msg_type: "interactive"`)
+- Messages now render with full markdown formatting: bold, italic, code blocks, lists, links, and blockquotes
+- Matches email channel behavior where markdown is converted to HTML for rich rendering
+- Improves readability and formatting consistency across channels
+
 ## [0.1.0] - 2026-04-06
 
 First multi-channel release: JYC is now a truly channel-agnostic AI agent framework with full Feishu (飞书/Lark) support alongside email.

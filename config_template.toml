@@ -34,6 +34,10 @@ poll_interval_secs = 30
 max_retries = 5
 folder = "INBOX"
 
+# Per-channel heartbeat message template (sent during long AI processing).
+# Supports {elapsed} placeholder. If not set, defaults to English.
+# heartbeat_template = "Still working on your request... ({elapsed} elapsed)"
+
 # Patterns define which messages to process.
 # All rules within a pattern use AND logic.
 # First matching pattern wins.
@@ -62,6 +66,7 @@ mode = "opencode"                  # "opencode" or "static"
 # [channels.feishu_bot]
 # type = "feishu"
 # workspace = "./feishu_workspace"
+# heartbeat_template = "正在处理中，请稍候... (已用时 {elapsed})"
 # 
 # [channels.feishu_bot.feishu]
 # app_id = "${FEISHU_APP_ID}"

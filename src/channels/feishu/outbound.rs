@@ -85,7 +85,11 @@ impl crate::channels::types::OutboundAdapter for FeishuOutboundAdapter {
         let result = self.client.send_text_message(chat_id, reply_text).await
             .context("Failed to send Feishu reply")?;
         
-        tracing::info!("Feishu reply sent to {}: {}", chat_id, &reply_text[..reply_text.len().min(50)]);
+        tracing::info!(
+            chat_id = %chat_id,
+            text_len = reply_text.len(),
+            "Feishu reply sent"
+        );
 
         // Store reply.md
         self.storage
@@ -126,12 +130,13 @@ impl crate::channels::types::OutboundAdapter for FeishuOutboundAdapter {
         })
     }
 
+    /// Send a heartbeat/progress update to the user via Feishu.
+    ///
+    /// The `message` is pre-formatted from the per-channel heartbeat_template.
     async fn send_heartbeat(
         &self,
         original: &InboundMessage,
-        elapsed_secs: u64,
-        activity: &str,
-        progress: &str,
+        message: &str,
     ) -> Result<SendResult> {
         // Ensure client is initialized
         self.client.initialize().await
@@ -140,19 +145,11 @@ impl crate::channels::types::OutboundAdapter for FeishuOutboundAdapter {
         // Extract chat ID from original message
         let chat_id = original.channel_uid.as_str();
         
-        // Format heartbeat message
-        let minutes = elapsed_secs / 60;
-        let seconds = elapsed_secs % 60;
-        let heartbeat_text = format!(
-            "Processing update ({}m {}s elapsed)\n\n**Activity:** {}\n**Progress:** {}",
-            minutes, seconds, activity, progress
-        );
-        
         // Send heartbeat using Feishu client
-        let result = self.client.send_text_message(chat_id, &heartbeat_text).await
+        let result = self.client.send_text_message(chat_id, message).await
             .context("Failed to send Feishu heartbeat")?;
         
-        tracing::debug!("Feishu heartbeat sent to {}: {}", chat_id, activity);
+        tracing::debug!("Feishu heartbeat sent to {}", chat_id);
         
         Ok(SendResult {
             message_id: result.message_id,

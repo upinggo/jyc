@@ -71,6 +71,11 @@ pub struct ChannelConfig {
     /// Patterns for this channel
     pub patterns: Option<Vec<ChannelPattern>>,
 
+    /// Per-channel heartbeat message template.
+    /// Supports `{elapsed}` placeholder (e.g., "3m 20s").
+    /// If not set, defaults to "Still working on your request... ({elapsed} elapsed)"
+    pub heartbeat_template: Option<String>,
+
     /// Channel-specific agent config override
     pub agent: Option<AgentConfig>,
 }

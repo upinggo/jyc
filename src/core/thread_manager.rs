@@ -63,6 +63,9 @@ pub struct ThreadManager {
     // Heartbeat configuration
     heartbeat_config: HeartbeatConfig,
 
+    // Per-channel heartbeat message template (supports {elapsed} placeholder)
+    heartbeat_template: String,
+
     cancel: CancellationToken,
     worker_handles: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -77,6 +80,7 @@ impl ThreadManager {
         agent: Arc<dyn AgentService>,
         cancel: CancellationToken,
         heartbeat_config: HeartbeatConfig,
+        heartbeat_template: String,
     ) -> Self {
         Self::new_with_options(
             max_concurrent,
@@ -87,6 +91,7 @@ impl ThreadManager {
             cancel,
             true, // enable_events: true by default (Thread Event system)
             heartbeat_config,
+            heartbeat_template,
         )
     }
     
@@ -100,6 +105,7 @@ impl ThreadManager {
         cancel: CancellationToken,
         enable_events: bool,
         heartbeat_config: HeartbeatConfig,
+        heartbeat_template: String,
     ) -> Self {
         Self {
             thread_queues: Mutex::new(HashMap::new()),
@@ -111,6 +117,7 @@ impl ThreadManager {
             event_buses: Mutex::new(HashMap::new()),
             enable_events,
             heartbeat_config,
+            heartbeat_template,
             cancel: cancel.child_token(),
             worker_handles: Mutex::new(Vec::new()),
         }
@@ -222,6 +229,7 @@ impl ThreadManager {
         let outbound = self.outbound.clone();
         let agent = self.agent.clone();
         let heartbeat_config = self.heartbeat_config.clone();
+        let heartbeat_template = self.heartbeat_template.clone();
         let tm_span = tracing::info_span!("tm", t = %thread_name);
 
         tokio::spawn(async move {
@@ -249,6 +257,7 @@ impl ThreadManager {
                     let thread_name_clone = thread_name.clone();
                     let current_message_rx_clone = current_message_rx.clone();
                     let hb_config = heartbeat_config.clone();
+                    let hb_template = heartbeat_template.clone();
                     
                     {
                         let thread_name_for_finish = thread_name_clone.clone();
@@ -261,6 +270,7 @@ impl ThreadManager {
                                 outbound_clone,
                                 current_message_rx_clone,
                                 hb_config,
+                                hb_template,
                             ).await;
                              tracing::trace!(thread = %thread_name_for_finish, "Event listener finished");
                         }))
@@ -337,6 +347,7 @@ impl ThreadManager {
         outbound: Arc<dyn OutboundAdapter>,
         current_message_rx: tokio::sync::watch::Receiver<Option<crate::channels::types::InboundMessage>>,
         heartbeat_config: HeartbeatConfig,
+        heartbeat_template: String,
     ) {
     use std::time::{Instant, Duration};
     
@@ -444,15 +455,19 @@ impl ThreadManager {
                         };
                         
                         if should_send {
+                            // Format the heartbeat message from per-channel template
+                            let minutes = elapsed_secs / 60;
+                            let seconds = elapsed_secs % 60;
+                            let elapsed_str = format!("{}m {}s", minutes, seconds);
+                            let heartbeat_msg = heartbeat_template.replace("{elapsed}", &elapsed_str);
+
                             tracing::info!(
                                 thread = %thread_name,
                                 elapsed_secs = elapsed_secs,
-                                activity = %activity,
-                                progress = %progress,
-                                "Sending heartbeat (Thread Manager controlled)"
+                                "Sending heartbeat"
                             );
                             
-                            match outbound.send_heartbeat(&message, *elapsed_secs, activity, progress).await {
+                            match outbound.send_heartbeat(&message, &heartbeat_msg).await {
                                 Ok(result) => {
                                     tracing::info!(
                                         thread = %thread_name,

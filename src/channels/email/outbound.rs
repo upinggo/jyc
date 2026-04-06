@@ -185,29 +185,16 @@ impl OutboundAdapter for EmailOutboundAdapter {
         Ok(SendResult { message_id })
     }
 
-    /// Send a heartbeat/progress update with detailed information.
-    /// This is used by the Thread Event system to send periodic updates
-    /// during long-running AI processing (e.g., every 5 minutes).
+    /// Send a heartbeat/progress update to the user via email.
+    ///
+    /// The `message` is pre-formatted from the per-channel heartbeat_template.
+    /// Sent as a threaded reply to the original email.
     async fn send_heartbeat(
         &self,
         original: &InboundMessage,
-        elapsed_secs: u64,
-        activity: &str,
-        progress: &str,
+        message: &str,
     ) -> Result<SendResult> {
-        let elapsed_secs_total = elapsed_secs;
-        let minutes = elapsed_secs_total / 60;
-        let seconds = elapsed_secs_total % 60;
-
         let subject = format!("[Processing Update] {}", original.topic);
-        let body = format!(
-            "Your message is still being processed.\n\n\
-             **Time elapsed:** {}m {}s\n\
-             **Current activity:** {}\n\
-             **Progress:** {}\n\n\
-             You will receive the full reply when processing is complete.",
-            minutes, seconds, activity, progress
-        );
 
         let mut smtp = self.smtp.lock().await;
         let mut refs: Vec<String> = original
@@ -224,7 +211,7 @@ impl OutboundAdapter for EmailOutboundAdapter {
                 self.from_name.as_deref(),
                 &original.sender_address,
                 &subject,
-                &body,
+                message,
                 original.external_id.as_deref(),
                 if refs.is_empty() { None } else { Some(&refs) },
                 None,

@@ -53,9 +53,6 @@ pub struct ChannelConfig {
     #[serde(rename = "type")]
     pub channel_type: String,
 
-    /// Workspace directory path (relative to workdir)
-    pub workspace: Option<String>,
-
     /// IMAP configuration (for email channels)
     pub inbound: Option<ImapConfig>,
 

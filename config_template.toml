@@ -12,7 +12,6 @@ max_queue_size_per_thread = 10
 
 [channels.work]
 type = "email"
-workspace = "./workspace"
 
 [channels.work.inbound]
 host = "${IMAP_HOST}"
@@ -65,7 +64,6 @@ mode = "opencode"                  # "opencode" or "static"
 # Uncomment and configure for Feishu/Lark integration
 # [channels.feishu_bot]
 # type = "feishu"
-# workspace = "./feishu_workspace"
 # heartbeat_template = "正在处理中，请稍候... (已用时 {elapsed})"
 # 
 # [channels.feishu_bot.feishu]

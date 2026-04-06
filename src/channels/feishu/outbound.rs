@@ -62,7 +62,7 @@ impl crate::channels::types::OutboundAdapter for FeishuOutboundAdapter {
         reply_text: &str,
         thread_path: &Path,
         message_dir: &str,
-        _attachments: Option<&[OutboundAttachment]>,
+        attachments: Option<&[OutboundAttachment]>,
     ) -> Result<SendResult> {
         // Ensure client is initialized
         self.client.initialize().await
@@ -71,7 +71,7 @@ impl crate::channels::types::OutboundAdapter for FeishuOutboundAdapter {
         // Extract chat ID from original message
         let chat_id = original.channel_uid.as_str();
         
-        // Send message using Feishu client
+        // 1. Send text reply
         let result = self.client.send_text_message(chat_id, reply_text).await
             .context("Failed to send Feishu reply")?;
         
@@ -81,7 +81,66 @@ impl crate::channels::types::OutboundAdapter for FeishuOutboundAdapter {
             "Feishu reply sent"
         );
 
-        // Store reply.md
+        // 2. Send attachments as separate messages (upload → send)
+        if let Some(attachments) = attachments {
+            use crate::channels::feishu::client::{feishu_file_type, is_image_content_type};
+
+            for att in attachments {
+                if is_image_content_type(&att.content_type) {
+                    // Image: upload → send image message
+                    match self.client.upload_image(&att.path, &att.filename).await {
+                        Ok(image_key) => {
+                            match self.client.send_image_message(chat_id, &image_key).await {
+                                Ok(_) => tracing::info!(
+                                    filename = %att.filename,
+                                    "Image attachment sent"
+                                ),
+                                Err(e) => tracing::warn!(
+                                    filename = %att.filename,
+                                    error = %e,
+                                    "Failed to send image attachment message"
+                                ),
+                            }
+                        }
+                        Err(e) => tracing::warn!(
+                            filename = %att.filename,
+                            error = %e,
+                            "Failed to upload image attachment"
+                        ),
+                    }
+                } else {
+                    // File: upload → send file message
+                    let ext = att.path.extension()
+                        .map(|e| e.to_string_lossy().to_lowercase())
+                        .unwrap_or_default();
+                    let file_type = feishu_file_type(&ext);
+
+                    match self.client.upload_file(&att.path, &att.filename, file_type).await {
+                        Ok(file_key) => {
+                            match self.client.send_file_message(chat_id, &file_key).await {
+                                Ok(_) => tracing::info!(
+                                    filename = %att.filename,
+                                    file_type = %file_type,
+                                    "File attachment sent"
+                                ),
+                                Err(e) => tracing::warn!(
+                                    filename = %att.filename,
+                                    error = %e,
+                                    "Failed to send file attachment message"
+                                ),
+                            }
+                        }
+                        Err(e) => tracing::warn!(
+                            filename = %att.filename,
+                            error = %e,
+                            "Failed to upload file attachment"
+                        ),
+                    }
+                }
+            }
+        }
+
+        // 3. Store reply.md
         self.storage
             .store_reply(thread_path, reply_text, message_dir)
             .await?;

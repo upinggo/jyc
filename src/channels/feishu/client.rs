@@ -6,6 +6,7 @@
 use anyhow::{Context, Result};
 use open_lark::prelude::*;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -264,12 +265,171 @@ impl FeishuClient {
             }
         }
     }
+
+    /// Upload a file to Feishu servers.
+    ///
+    /// Returns the `file_key` for use in file messages.
+    /// Requires scope: `im:resource`.
+    pub async fn upload_file(
+        &self,
+        path: &Path,
+        filename: &str,
+        file_type: &str,
+    ) -> Result<String> {
+        let core_config = self.get_core_config().await?;
+        let file_bytes = tokio::fs::read(path).await
+            .with_context(|| format!("Failed to read file: {}", path.display()))?;
+
+        use open_lark::communication::im::im::v1::file::create::{
+            CreateFileBody, CreateFileRequest,
+        };
+
+        let body = CreateFileBody::new(file_type, filename);
+        let resp = CreateFileRequest::new(core_config)
+            .execute(body, file_bytes)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to upload file to Feishu: {e}"))?;
+
+        tracing::info!(
+            filename = %filename,
+            file_type = %file_type,
+            file_key = %resp.file_key,
+            "File uploaded to Feishu"
+        );
+
+        Ok(resp.file_key)
+    }
+
+    /// Upload an image to Feishu servers.
+    ///
+    /// Returns the `image_key` for use in image messages.
+    /// Requires scope: `im:resource`.
+    pub async fn upload_image(
+        &self,
+        path: &Path,
+        filename: &str,
+    ) -> Result<String> {
+        let core_config = self.get_core_config().await?;
+        let image_bytes = tokio::fs::read(path).await
+            .with_context(|| format!("Failed to read image: {}", path.display()))?;
+
+        use open_lark::communication::im::im::v1::image::create::CreateImageRequest;
+        use open_lark::communication::im::im::v1::image::models::ImageType;
+
+        let resp = CreateImageRequest::new(core_config)
+            .image_type(ImageType::Message)
+            .file_name(filename)
+            .execute(image_bytes)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to upload image to Feishu: {e}"))?;
+
+        tracing::info!(
+            filename = %filename,
+            image_key = %resp.image_key,
+            "Image uploaded to Feishu"
+        );
+
+        Ok(resp.image_key)
+    }
+
+    /// Send a file message to a chat (after uploading via `upload_file()`).
+    pub async fn send_file_message(
+        &self,
+        chat_id: &str,
+        file_key: &str,
+    ) -> Result<FeishuMessageResult> {
+        let core_config = self.get_core_config().await?;
+
+        use open_lark::communication::im::im::v1::message::create::{
+            CreateMessageBody, CreateMessageRequest,
+        };
+        use open_lark::communication::im::im::v1::message::models::ReceiveIdType;
+
+        let body = CreateMessageBody {
+            receive_id: chat_id.to_string(),
+            msg_type: "file".to_string(),
+            content: serde_json::json!({"file_key": file_key}).to_string(),
+            uuid: None,
+        };
+
+        let resp = CreateMessageRequest::new(core_config)
+            .receive_id_type(ReceiveIdType::ChatId)
+            .execute(body)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to send file message: {e}"))?;
+
+        let message_id = resp
+            .get("data")
+            .and_then(|d| d.get("message_id"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        Ok(FeishuMessageResult { message_id })
+    }
+
+    /// Send an image message to a chat (after uploading via `upload_image()`).
+    pub async fn send_image_message(
+        &self,
+        chat_id: &str,
+        image_key: &str,
+    ) -> Result<FeishuMessageResult> {
+        let core_config = self.get_core_config().await?;
+
+        use open_lark::communication::im::im::v1::message::create::{
+            CreateMessageBody, CreateMessageRequest,
+        };
+        use open_lark::communication::im::im::v1::message::models::ReceiveIdType;
+
+        let body = CreateMessageBody {
+            receive_id: chat_id.to_string(),
+            msg_type: "image".to_string(),
+            content: serde_json::json!({"image_key": image_key}).to_string(),
+            uuid: None,
+        };
+
+        let resp = CreateMessageRequest::new(core_config)
+            .receive_id_type(ReceiveIdType::ChatId)
+            .execute(body)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to send image message: {e}"))?;
+
+        let message_id = resp
+            .get("data")
+            .and_then(|d| d.get("message_id"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        Ok(FeishuMessageResult { message_id })
+    }
 }
 
 /// Result of sending a Feishu message.
 #[derive(Debug, Clone)]
 pub struct FeishuMessageResult {
     pub message_id: String,
+}
+
+/// Map file extension to Feishu file_type string.
+///
+/// Feishu supports: "opus", "mp4", "pdf", "doc", "xls", "ppt", "stream".
+/// Text/code files and unknown types default to "stream" (generic binary).
+pub fn feishu_file_type(ext: &str) -> &'static str {
+    match ext.to_lowercase().as_str() {
+        "pdf" => "pdf",
+        "doc" | "docx" => "doc",
+        "xls" | "xlsx" => "xls",
+        "ppt" | "pptx" => "ppt",
+        "mp4" => "mp4",
+        "opus" | "ogg" => "opus",
+        _ => "stream",
+    }
+}
+
+/// Check if a content_type represents an image.
+pub fn is_image_content_type(content_type: &str) -> bool {
+    content_type.starts_with("image/")
 }
 
 #[cfg(test)]

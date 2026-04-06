@@ -33,6 +33,7 @@ Navigate to **Permissions & Scopes** (权限管理) in your app settings and add
 | `im:message.group_at_msg:readonly` | Read @-mention messages | Receive messages where the bot is @-mentioned |
 | `im:chat:readonly` | Read chat info | Get group chat names (for readable thread directory names) |
 | `contact:user.base:readonly` | Read user info | Get user display names (for sender names in prompts) |
+| `im:resource` | Upload files/images | Required for sending attachments (files, images) in replies |
 
 After adding the scopes, click **Apply for Permissions** and wait for approval (self-built apps in your own tenant are usually auto-approved).
 

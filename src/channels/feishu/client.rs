@@ -115,11 +115,10 @@ impl FeishuClient {
         Ok(resp.data.app_access_token)
     }
 
-    /// Send a text message to a chat.
+    /// Send a message to a chat as an interactive card with markdown rendering.
     ///
-    /// Uses the openlark IM API to send a message to the specified chat_id.
-    /// For p2p (direct messages), `chat_id` should be the user's open_id
-    /// and `receive_id_type` should be `OpenId`.
+    /// Uses Feishu's `"interactive"` message type which supports markdown
+    /// formatting (bold, italic, code, lists, links) natively in the card UI.
     pub async fn send_text_message(
         &self,
         chat_id: &str,
@@ -132,10 +131,20 @@ impl FeishuClient {
         };
         use open_lark::communication::im::im::v1::message::models::ReceiveIdType;
 
+        // Build interactive card with markdown element
+        let card_content = serde_json::json!({
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": text
+                }
+            ]
+        });
+
         let body = CreateMessageBody {
             receive_id: chat_id.to_string(),
-            msg_type: "text".to_string(),
-            content: serde_json::json!({"text": text}).to_string(),
+            msg_type: "interactive".to_string(),
+            content: card_content.to_string(),
             uuid: None,
         };
 
@@ -157,7 +166,7 @@ impl FeishuClient {
             chat_id = %chat_id,
             message_id = %message_id,
             text_len = text.len(),
-            "Feishu message sent"
+            "Feishu card message sent"
         );
 
         Ok(FeishuMessageResult { message_id })

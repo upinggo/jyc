@@ -4,6 +4,21 @@ Channel-agnostic AI agent that operates through messaging channels. Users intera
 
 **Why Rust:** Single static binary, zero runtime dependencies, memory safety without GC, and predictable low-latency performance for long-running server processes.
 
+## Prerequisites
+
+- **Rust** (stable toolchain): https://rustup.rs
+- **protobuf-compiler** (required for Feishu WebSocket support):
+  ```bash
+  # Debian/Ubuntu
+  sudo apt-get install -y protobuf-compiler
+
+  # macOS
+  brew install protobuf
+
+  # Verify
+  protoc --version
+  ```
+
 ## Quick Start
 
 ### 1. Build

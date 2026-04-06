@@ -171,10 +171,6 @@ pub struct OpenCodeConfig {
 
     /// System prompt for the AI
     pub system_prompt: Option<String>,
-
-    /// Whether to include thread history in prompts
-    #[serde(default = "default_true")]
-    pub include_thread_history: bool,
 }
 
 /// Session summary configuration.

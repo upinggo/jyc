@@ -1,159 +1,405 @@
 //! WebSocket connection handler for Feishu real-time events.
+//!
+//! Uses the openlark SDK's `LarkWsClient` to establish a persistent WebSocket
+//! connection to Feishu's event subscription endpoint. Incoming events are
+//! parsed and converted to `InboundMessage` for the channel-agnostic pipeline.
 
-use anyhow::Result;
-use std::time::Duration;
-use tracing::{error, info};
+use anyhow::{Context, Result};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
-use super::config::{FeishuConfig, WebSocketConfig};
+use open_lark::ws_client::{EventDispatcherHandler, LarkWsClient};
 
-/// WebSocket connection handler for Feishu
+use crate::channels::types::{InboundMessage, MessageContent};
+
+use super::config::FeishuConfig;
+use super::types::{
+    EventEnvelope, FileContent, ImageContent, TextContent,
+};
+
+/// WebSocket connection handler for Feishu.
+///
+/// Manages the lifecycle of a single WebSocket connection:
+/// connect → receive events → parse → convert to InboundMessage → callback.
+///
+/// Reconnection logic is handled by the caller (`FeishuInboundAdapter::start()`).
 pub struct FeishuWebSocket {
-    config: WebSocketConfig,
+    config: FeishuConfig,
     reconnect_count: usize,
 }
 
 impl FeishuWebSocket {
-    /// Create a new WebSocket handler
+    /// Create a new WebSocket handler.
     pub fn new(config: &FeishuConfig) -> Self {
         Self {
-            config: config.websocket.clone(),
+            config: config.clone(),
             reconnect_count: 0,
         }
     }
-    
-    /// Connect to Feishu WebSocket
-    pub async fn connect(&mut self) -> Result<()> {
-        if !self.config.enabled {
-            info!("WebSocket is disabled in configuration");
+
+    /// Connect to Feishu WebSocket and run the event loop.
+    ///
+    /// Blocks until the cancel token fires or the connection drops.
+    /// For each received message event, converts to `InboundMessage`
+    /// and calls `on_message`.
+    ///
+    /// Returns `Ok(())` on clean cancellation, `Err(...)` on connection failure.
+    pub async fn run(
+        &mut self,
+        channel_name: &str,
+        on_message: &(dyn Fn(InboundMessage) -> Result<()> + Send + Sync),
+        cancel: &CancellationToken,
+    ) -> Result<()> {
+        // 1. Build openlark client Config from FeishuConfig
+        let ws_config = open_lark::Config::builder()
+            .app_id(&self.config.app_id)
+            .app_secret(&self.config.app_secret)
+            .base_url(&self.config.base_url)
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build Feishu WebSocket config: {e}"))?;
+
+        // 2. Create event payload channel
+        let (payload_tx, mut payload_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+
+        // 3. Build event dispatcher handler
+        let event_handler = EventDispatcherHandler::builder()
+            .payload_sender(payload_tx)
+            .build();
+
+        // 4. Spawn LarkWsClient::open() — blocks until connection drops
+        let ws_config = Arc::new(ws_config);
+        tracing::info!("Connecting to Feishu WebSocket...");
+        let ws_handle = tokio::spawn(async move {
+            LarkWsClient::open(ws_config, event_handler).await
+        });
+
+        // Connection succeeded if we get here (open() spawns internal loops)
+        self.reset_reconnection_count();
+        tracing::info!("Feishu WebSocket connected, listening for events");
+
+        // 5. Event loop: consume payloads until cancel or channel closes
+        loop {
+            tokio::select! {
+                payload = payload_rx.recv() => {
+                    match payload {
+                        Some(data) => {
+                            if let Err(e) = self.handle_payload(channel_name, &data, on_message) {
+                                tracing::warn!(error = %e, "Failed to process Feishu event");
+                            }
+                        }
+                        None => {
+                            // Channel closed — WebSocket connection dropped
+                            tracing::warn!("Feishu WebSocket payload channel closed");
+                            break;
+                        }
+                    }
+                }
+                _ = cancel.cancelled() => {
+                    tracing::info!("Feishu WebSocket cancelled");
+                    ws_handle.abort();
+                    return Ok(());
+                }
+            }
+        }
+
+        // If we get here, the connection dropped (not cancelled)
+        match ws_handle.await {
+            Ok(Ok(())) => {
+                Err(anyhow::anyhow!("Feishu WebSocket connection closed unexpectedly"))
+            }
+            Ok(Err(e)) => {
+                Err(anyhow::anyhow!("Feishu WebSocket error: {e}"))
+            }
+            Err(e) if e.is_cancelled() => {
+                // Task was aborted (normal on cancel)
+                Ok(())
+            }
+            Err(e) => {
+                Err(anyhow::anyhow!("Feishu WebSocket task panicked: {e}"))
+            }
+        }
+    }
+
+    /// Parse a raw WebSocket payload and route it as an `InboundMessage`.
+    fn handle_payload(
+        &self,
+        channel_name: &str,
+        data: &[u8],
+        on_message: &(dyn Fn(InboundMessage) -> Result<()> + Send + Sync),
+    ) -> Result<()> {
+        let envelope: EventEnvelope = serde_json::from_slice(data)
+            .context("Failed to parse Feishu event payload as JSON")?;
+
+        // Only handle message received events
+        if envelope.header.event_type != "im.message.receive_v1" {
+            tracing::debug!(
+                event_type = %envelope.header.event_type,
+                "Skipping non-message event"
+            );
             return Ok(());
         }
-        
-        info!("Connecting to Feishu WebSocket...");
-        
-        // Feishu WebSocket connection details:
-        // 1. Need to get app access token first
-        // 2. WebSocket URL: wss://open.feishu.cn/event/v1/ws
-        // 3. Need to pass token in query parameters or headers
-        
-        // TODO: Implement actual WebSocket connection
-        // This requires:
-        // 1. Getting app access token
-        // 2. Establishing WebSocket connection
-        // 3. Handling authentication
-        // 4. Subscribing to events
-        
-        info!("[IMPLEMENTATION IN PROGRESS] WebSocket connection would be established here");
-        
+
+        let message = self.convert_to_inbound(channel_name, &envelope)
+            .context("Failed to convert Feishu event to InboundMessage")?;
+
+        tracing::info!(
+            message_id = %message.channel_uid,
+            sender = %message.sender_address,
+            chat_type = message.metadata.get("chat_type").and_then(|v| v.as_str()).unwrap_or("?"),
+            msg_type = envelope.event.message.message_type.as_str(),
+            "Feishu message received"
+        );
+
+        on_message(message)?;
         Ok(())
     }
-    
-    /// Start listening for events
-    pub async fn start_listening(&mut self) -> Result<()> {
-        if !self.config.enabled {
-            return Ok(());
+
+    /// Convert a Feishu event envelope to a channel-agnostic `InboundMessage`.
+    fn convert_to_inbound(
+        &self,
+        channel_name: &str,
+        envelope: &EventEnvelope,
+    ) -> Result<InboundMessage> {
+        let event = &envelope.event;
+        let msg = &event.message;
+        let sender = &event.sender;
+
+        // Extract text content based on message_type
+        let text = match msg.message_type.as_str() {
+            "text" => {
+                let content: TextContent = serde_json::from_str(&msg.content)
+                    .context("Failed to parse text message content")?;
+                // Strip mention placeholders like @_user_1 from text
+                let cleaned = strip_mention_placeholders(&content.text, msg.mentions.as_deref());
+                cleaned
+            }
+            "image" => {
+                let content: ImageContent = serde_json::from_str(&msg.content)
+                    .context("Failed to parse image message content")?;
+                format!("[Image: {}]", content.image_key)
+            }
+            "file" => {
+                let content: FileContent = serde_json::from_str(&msg.content)
+                    .context("Failed to parse file message content")?;
+                let name = content.file_name.as_deref().unwrap_or("unnamed");
+                format!("[File: {} (key: {})]", name, content.file_key)
+            }
+            "interactive" => {
+                // Card messages: store raw content JSON for now
+                format!("[Card message]: {}", msg.content)
+            }
+            other => {
+                format!("[Unsupported message type: {}]: {}", other, msg.content)
+            }
+        };
+
+        // Resolve chat_id — the reply target
+        // For group messages: use chat_id from the message
+        // For p2p (direct messages): use sender's open_id
+        let chat_id = match msg.chat_type.as_str() {
+            "p2p" => sender.sender_id.open_id.clone().unwrap_or_default(),
+            _ => msg.chat_id.clone().unwrap_or_default(),
+        };
+
+        // Build mentions metadata as array of {id, name} objects
+        let mentions_meta = msg.mentions.as_ref().map(|mentions| {
+            let arr: Vec<serde_json::Value> = mentions
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "id": m.id.open_id.as_deref().unwrap_or(""),
+                        "name": m.name,
+                    })
+                })
+                .collect();
+            serde_json::Value::Array(arr)
+        });
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "chat_id".to_string(),
+            serde_json::Value::String(chat_id.clone()),
+        );
+        metadata.insert(
+            "chat_type".to_string(),
+            serde_json::Value::String(msg.chat_type.clone()),
+        );
+        if let Some(open_id) = &sender.sender_id.open_id {
+            metadata.insert(
+                "user_id".to_string(),
+                serde_json::Value::String(open_id.clone()),
+            );
         }
-        
-        info!("Starting WebSocket event listener...");
-        
-        // TODO: Implement WebSocket event handling
-        // This would involve:
-        // 1. Connecting to WebSocket endpoint
-        // 2. Handling authentication
-        // 3. Subscribing to events
-        // 4. Processing incoming messages
-        // 5. Handling reconnection
-        
-        info!("WebSocket listener would start here");
-        
-        Ok(())
+        if let Some(mentions) = mentions_meta {
+            metadata.insert("mentions".to_string(), mentions);
+        }
+        if let Some(ref event_id) = envelope.header.event_id {
+            metadata.insert(
+                "event_id".to_string(),
+                serde_json::Value::String(event_id.clone()),
+            );
+        }
+
+        let sender_id = sender
+            .sender_id
+            .open_id
+            .as_deref()
+            .unwrap_or("unknown");
+
+        let timestamp = msg
+            .create_time
+            .as_deref()
+            .and_then(|t| t.parse::<i64>().ok())
+            .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
+            .unwrap_or_else(chrono::Utc::now);
+
+        Ok(InboundMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            channel: channel_name.to_string(),
+            channel_uid: chat_id,
+            sender: sender_id.to_string(),
+            sender_address: sender_id.to_string(),
+            recipients: vec![],
+            topic: String::new(), // Feishu messages don't have subjects
+            content: MessageContent {
+                text: Some(text),
+                html: None,
+                markdown: None,
+            },
+            timestamp,
+            thread_refs: None,
+            reply_to_id: None,
+            external_id: Some(msg.message_id.clone()),
+            attachments: vec![],
+            metadata,
+            matched_pattern: None,
+        })
     }
-    
-    /// Disconnect from WebSocket
-    pub async fn disconnect(&self) -> Result<()> {
-        if !self.config.enabled {
-            return Ok(());
+
+    /// Handle reconnection with backoff. Returns `true` if we should retry.
+    pub async fn handle_reconnection(&mut self) -> bool {
+        if self.reconnect_count >= self.config.websocket.max_reconnect_attempts {
+            tracing::error!(
+                max_attempts = self.config.websocket.max_reconnect_attempts,
+                "Maximum reconnection attempts reached"
+            );
+            return false;
         }
-        
-        info!("Disconnecting from Feishu WebSocket...");
-        
-        // TODO: Implement WebSocket disconnection
-        
-        Ok(())
-    }
-    
-    /// Handle reconnection logic
-    async fn handle_reconnection(&mut self) -> Result<()> {
-        if self.reconnect_count >= self.config.max_reconnect_attempts {
-            error!("Maximum reconnection attempts ({}) reached", self.config.max_reconnect_attempts);
-            return Err(anyhow::anyhow!("Maximum reconnection attempts reached"));
-        }
-        
-        let delay = Duration::from_secs(self.config.reconnect_delay_secs);
-        info!("Reconnecting in {} seconds (attempt {}/{})", 
-              delay.as_secs(), 
-              self.reconnect_count + 1, 
-              self.config.max_reconnect_attempts);
-        
-        tokio::time::sleep(delay).await;
+
+        let delay_secs = self.config.websocket.reconnect_delay_secs;
         self.reconnect_count += 1;
-        
-        Ok(())
+        tracing::info!(
+            attempt = self.reconnect_count,
+            max_attempts = self.config.websocket.max_reconnect_attempts,
+            delay_secs = delay_secs,
+            "Reconnecting to Feishu WebSocket"
+        );
+
+        tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+        true
     }
-    
-    /// Reset reconnection count
-    fn reset_reconnection_count(&mut self) {
+
+    /// Reset reconnection count (called after successful connection).
+    pub fn reset_reconnection_count(&mut self) {
         self.reconnect_count = 0;
     }
 }
 
-/// WebSocket message types
-#[derive(Debug, Clone)]
-pub enum WebSocketMessage {
-    /// Text message
-    Text(String),
-    /// Binary message
-    Binary(Vec<u8>),
-    /// Ping message
-    Ping,
-    /// Pong message
-    Pong,
-    /// Close message
-    Close,
-}
+/// Strip mention placeholder keys (e.g., "@_user_1") from message text.
+///
+/// In Feishu, when someone types "@jyc hello", the text content contains
+/// `"@_user_1 hello"` with a separate mentions array mapping `@_user_1`
+/// to the actual user. We replace placeholder keys with the display name.
+fn strip_mention_placeholders(text: &str, mentions: Option<&[super::types::EventMention]>) -> String {
+    let Some(mentions) = mentions else {
+        return text.to_string();
+    };
 
-/// WebSocket event types
-#[derive(Debug, Clone)]
-pub enum WebSocketEvent {
-    /// Message received event
-    MessageReceived(WebSocketMessage),
-    /// Connection established
-    Connected,
-    /// Connection closed
-    Disconnected,
-    /// Error occurred
-    Error(String),
+    let mut result = text.to_string();
+    for mention in mentions {
+        // Replace "@_user_1" with "@displayname"
+        result = result.replace(&mention.key, &format!("@{}", mention.name));
+    }
+    result.trim().to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_websocket_creation() {
         let config = FeishuConfig::default();
         let ws = FeishuWebSocket::new(&config);
-        
-        assert!(ws.config.enabled);
         assert_eq!(ws.reconnect_count, 0);
     }
-    
-    #[tokio::test]
-    async fn test_websocket_disabled() {
+
+    #[test]
+    fn test_strip_mention_placeholders_none() {
+        let result = strip_mention_placeholders("hello world", None);
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_strip_mention_placeholders_empty() {
+        let result = strip_mention_placeholders("hello world", Some(&[]));
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_strip_mention_placeholders_single() {
+        use super::super::types::{EventMention, MentionIds};
+        let mentions = vec![EventMention {
+            key: "@_user_1".to_string(),
+            id: MentionIds {
+                open_id: Some("ou_xxx".to_string()),
+                user_id: None,
+                union_id: None,
+            },
+            name: "jyc".to_string(),
+        }];
+        let result = strip_mention_placeholders("@_user_1 hello", Some(&mentions));
+        assert_eq!(result, "@jyc hello");
+    }
+
+    #[test]
+    fn test_strip_mention_placeholders_multiple() {
+        use super::super::types::{EventMention, MentionIds};
+        let mentions = vec![
+            EventMention {
+                key: "@_user_1".to_string(),
+                id: MentionIds {
+                    open_id: Some("ou_aaa".to_string()),
+                    user_id: None,
+                    union_id: None,
+                },
+                name: "bot".to_string(),
+            },
+            EventMention {
+                key: "@_user_2".to_string(),
+                id: MentionIds {
+                    open_id: Some("ou_bbb".to_string()),
+                    user_id: None,
+                    union_id: None,
+                },
+                name: "admin".to_string(),
+            },
+        ];
+        let result = strip_mention_placeholders("@_user_1 @_user_2 help", Some(&mentions));
+        assert_eq!(result, "@bot @admin help");
+    }
+
+    #[test]
+    fn test_reconnection_count() {
         let mut config = FeishuConfig::default();
-        config.websocket.enabled = false;
-        
+        config.websocket.max_reconnect_attempts = 3;
         let mut ws = FeishuWebSocket::new(&config);
-        let result = ws.connect().await;
-        assert!(result.is_ok());
+        assert_eq!(ws.reconnect_count, 0);
+
+        ws.reconnect_count = 2;
+        ws.reset_reconnection_count();
+        assert_eq!(ws.reconnect_count, 0);
     }
 }

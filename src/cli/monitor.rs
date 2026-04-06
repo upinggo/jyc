@@ -281,7 +281,7 @@ pub async fn run(args: &MonitorArgs, workdir: &Path) -> Result<()> {
                 let router_for_callback = router.clone();
 
                 let task = tokio::spawn(async move {
-                    let adapter = FeishuInboundAdapter::new(feishu_config);
+                    let adapter = FeishuInboundAdapter::new(feishu_config, channel_name_owned.clone());
 
                     // Wire on_message to route through FeishuMatcher → MessageRouter
                     use crate::channels::types::InboundAdapter;

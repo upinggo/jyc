@@ -3,11 +3,9 @@
 //! This module handles receiving messages from Feishu via WebSocket connections
 //! and provides channel-specific pattern matching and thread name derivation.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::channels::types::{
@@ -220,16 +218,17 @@ pub fn feishu_match_message(
 
 /// Feishu inbound adapter for receiving messages via WebSocket.
 pub struct FeishuInboundAdapter {
-    websocket: Arc<Mutex<FeishuWebSocket>>,
     config: FeishuConfig,
+    /// Channel name from config (e.g., "feishu_bot")
+    channel_name: String,
 }
 
 impl FeishuInboundAdapter {
     /// Create a new Feishu inbound adapter.
-    pub fn new(config: FeishuConfig) -> Self {
+    pub fn new(config: FeishuConfig, channel_name: String) -> Self {
         Self {
-            websocket: Arc::new(Mutex::new(FeishuWebSocket::new(&config))),
             config,
+            channel_name,
         }
     }
 }
@@ -262,47 +261,42 @@ impl ChannelMatcher for FeishuInboundAdapter {
 impl crate::channels::types::InboundAdapter for FeishuInboundAdapter {
     async fn start(
         &self,
-        _options: InboundAdapterOptions,
+        options: InboundAdapterOptions,
         cancel: CancellationToken,
     ) -> Result<()> {
         if !self.config.websocket.enabled {
-            tracing::info!("Feishu WebSocket is disabled in configuration");
+            tracing::info!("Feishu WebSocket disabled, holding channel alive until cancel");
+            cancel.cancelled().await;
             return Ok(());
         }
 
-        tracing::info!("Starting Feishu inbound adapter with WebSocket...");
+        let mut ws = FeishuWebSocket::new(&self.config);
+        let channel_name = self.channel_name.clone();
 
-        // Connect WebSocket
-        let mut websocket = self.websocket.lock().await;
-        websocket
-            .connect()
-            .await
-            .context("Failed to connect Feishu WebSocket")?;
+        loop {
+            tracing::info!("Starting Feishu WebSocket connection...");
 
-        // Start listening in background task
-        let websocket_clone = Arc::clone(&self.websocket);
-        let cancel_clone = cancel.clone();
-
-        tokio::spawn(async move {
-            let mut ws = websocket_clone.lock().await;
-
-            // Start listening loop
-            match ws.start_listening().await {
-                Ok(_) => {
-                    tracing::info!("Feishu WebSocket listener stopped normally");
+            match ws.run(&channel_name, &*options.on_message, &cancel).await {
+                Ok(()) => {
+                    // Clean exit (cancelled)
+                    tracing::info!("Feishu WebSocket stopped cleanly");
+                    break;
                 }
                 Err(e) => {
-                    tracing::error!("Feishu WebSocket listener error: {}", e);
+                    if cancel.is_cancelled() {
+                        tracing::info!("Feishu WebSocket shutting down (cancelled)");
+                        break;
+                    }
+                    tracing::error!(error = %e, "Feishu WebSocket error");
+
+                    if !ws.handle_reconnection().await {
+                        tracing::error!("Max reconnection attempts reached, stopping Feishu channel");
+                        break;
+                    }
+                    // Loop continues → reconnect
                 }
             }
-
-            // Cleanup on cancellation
-            if cancel_clone.is_cancelled() {
-                let _ = ws.disconnect().await;
-            }
-        });
-
-        tracing::info!("Feishu inbound adapter started successfully");
+        }
         Ok(())
     }
 }

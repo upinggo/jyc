@@ -545,13 +545,18 @@ pub struct PatternMatch {
 }
 
 /// Inbound adapter trait — one per channel type
-#[async_trait]
-pub trait InboundAdapter: Send + Sync {
+/// Channel-specific message matching and thread name derivation.
+///
+/// Pure-logic trait used by MessageRouter. Every channel type implements this.
+/// Separated from InboundAdapter to allow use without the lifecycle (start/stop).
+/// Stateless implementations (EmailMatcher, FeishuMatcher) can be cheaply created.
+pub trait ChannelMatcher: Send + Sync {
     fn channel_type(&self) -> &str;
 
     fn derive_thread_name(
         &self,
         message: &InboundMessage,
+        patterns: &[ChannelPattern],
         pattern_match: Option<&PatternMatch>,
     ) -> String;
 
@@ -560,7 +565,11 @@ pub trait InboundAdapter: Send + Sync {
         message: &InboundMessage,
         patterns: &[ChannelPattern],
     ) -> Option<PatternMatch>;
+}
 
+/// Inbound adapter trait — adds connection lifecycle on top of ChannelMatcher.
+#[async_trait]
+pub trait InboundAdapter: ChannelMatcher {
     async fn start(
         &self,
         options: InboundAdapterOptions,
@@ -568,7 +577,8 @@ pub trait InboundAdapter: Send + Sync {
     ) -> Result<()>;
 }
 
-/// Outbound adapter trait — one per channel type
+/// Outbound adapter trait — one per channel type.
+/// Owns the full reply lifecycle: format + send + store.
 #[async_trait]
 pub trait OutboundAdapter: Send + Sync {
     fn channel_type(&self) -> &str;
@@ -576,10 +586,17 @@ pub trait OutboundAdapter: Send + Sync {
     async fn connect(&self) -> Result<()>;
     async fn disconnect(&self) -> Result<()>;
 
+    /// Strip channel-specific artifacts from a message body.
+    /// Email: strips quoted reply history. Feishu: trims whitespace.
+    fn clean_body(&self, raw_body: &str) -> String;
+
+    /// Send a reply with full lifecycle management (format + send + store).
     async fn send_reply(
         &self,
         original: &InboundMessage,
         reply_text: &str,
+        thread_path: &Path,
+        message_dir: &str,
         attachments: Option<&[OutboundAttachment]>,
     ) -> Result<SendResult>;
 
@@ -605,7 +622,7 @@ pub struct SendResult {
 }
 ```
 
-### Email Channel Pattern Rules
+### Channel Pattern Rules
 
 ```rust
 #[derive(Debug, Clone, Deserialize)]
@@ -618,17 +635,26 @@ pub struct ChannelPattern {
     pub attachments: Option<AttachmentConfig>,
 }
 
-/// Email-specific pattern rules
+/// Channel-agnostic pattern matching rules.
+/// All present rules must match (AND logic).
+/// Each channel's ChannelMatcher only checks the fields relevant to it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PatternRules {
-    pub sender: Option<SenderRule>,
-    pub subject: Option<SubjectRule>,
+    // --- Shared rules ---
+    pub sender: Option<SenderRule>,           // Sender matching (email address, feishu user ID)
+
+    // --- Email rules ---
+    pub subject: Option<SubjectRule>,         // Subject matching (email only)
+
+    // --- Feishu rules ---
+    pub mentions: Option<Vec<String>>,        // @mention user/bot IDs or names (OR logic)
+    pub keywords: Option<Vec<String>>,        // Keywords in message body (OR, case-insensitive)
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SenderRule {
     pub exact: Option<Vec<String>>,           // Case-insensitive exact match
-    pub domain: Option<Vec<String>>,          // Domain match
+    pub domain: Option<Vec<String>>,          // Domain match (email only)
     pub regex: Option<String>,                // Regex match
 }
 
@@ -715,20 +741,21 @@ pub struct ThreadManager {
     semaphore: Arc<Semaphore>,
 
     /// Configuration
-    max_concurrent_threads: usize,      // Semaphore permits (default: 3)
-    max_queue_size_per_thread: usize,   // mpsc buffer size (default: 10)
+    max_queue_size: usize,              // mpsc buffer size (default: 10)
 
     /// Shared dependencies (wrapped in Arc for worker tasks)
-    opencode: Arc<OpenCodeService>,
     storage: Arc<MessageStorage>,
-    command_registry: Arc<CommandRegistry>,
-    channel_registry: Arc<ChannelRegistry>,
+    outbound: Arc<dyn OutboundAdapter>, // Channel-agnostic outbound
+    agent: Arc<dyn AgentService>,
 
     /// Thread-isolated event buses (Thread Event system)
     event_buses: Mutex<HashMap<String, ThreadEventBusRef>>,
     enable_events: bool,
 
-    /// Graceful shutdown
+    /// Heartbeat configuration (configurable via [heartbeat] config section)
+    heartbeat_config: HeartbeatConfig,
+
+    /// Graceful shutdown (child token — cancelling this does NOT cancel other channels)
     cancel: CancellationToken,
 
     /// Worker join handles for cleanup
@@ -1854,12 +1881,6 @@ max_idle_hours = 120.0           # Maximum idle time before summary when active 
 max_summaries = 50               # Maximum number of summary files to keep
 storage_dir = ".jyc/session-summaries"  # Directory to store summary files
 
-[agent.progress]
-enabled = true
-initial_delay_secs = 180
-interval_secs = 180
-max_messages = 5
-
 [agent.attachments]
 enabled = true
 max_file_size = "10mb"
@@ -1951,7 +1972,6 @@ pub struct AgentConfig {
     pub mode: String,                         // "static" | "opencode"
     pub text: Option<String>,
     pub opencode: Option<OpenCodeConfig>,
-    pub progress: Option<ProgressConfig>,
     pub attachments: Option<AttachmentConfig>,
 }
 
@@ -1986,6 +2006,18 @@ pub struct HealthCheckConfig {
     #[serde(default = "default_24")]
     pub interval_hours: f64,
     pub recipient: Option<String>,            // Falls back to alerting.recipient
+}
+
+/// Heartbeat configuration — controls progress updates during long AI processing.
+/// Configurable via [heartbeat] TOML section. Defaults: 10min interval, 60s min elapsed.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HeartbeatConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_600")]
+    pub interval_secs: u64,                   // Default: 600 (10 minutes)
+    #[serde(default = "default_60")]
+    pub min_elapsed_secs: u64,                // Default: 60 (1 minute)
 }
 ```
 

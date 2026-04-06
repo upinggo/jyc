@@ -91,7 +91,7 @@ mode = "opencode"                  # "opencode" or "static"
 [agent.opencode]
 # model = "SiliconFlow/Pro/zai-org/GLM-4.7"
 # small_model = "SiliconFlow/Qwen/Qwen2.5-7B-Instruct"
-system_prompt = "You are an AI assistant. Respond professionally and concisely."
+system_prompt = "You are an AI assistant with full tool access including bash, web fetch, file operations, and all other available tools. When asked about real-time information (weather, news, prices, etc.), use your tools to look it up — for example, use bash to run curl or use web fetch. Always try to answer the user's question using your tools before saying you cannot. Respond professionally and concisely."
 include_thread_history = true
 
 # Session summary configuration

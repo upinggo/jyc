@@ -74,26 +74,25 @@ mode = "opencode"                  # "opencode" or "static"
 # max_reconnect_attempts = 10
 # heartbeat_interval_secs = 30
 # 
+# # Feishu patterns — match messages by @mentions, keywords, or sender.
+# # All rules within a pattern use AND logic. First matching pattern wins.
 # [[channels.feishu_bot.patterns]]
 # name = "mention_bot"
 # enabled = true
 # 
-# # Feishu-specific pattern matching (placeholder - will be implemented)
-# # [channels.feishu_bot.patterns.rules]
-# # mentions = ["bot_id"]
-# # keywords = ["@bot", "帮助"]
+# [channels.feishu_bot.patterns.rules]
+# mentions = ["jyc"]                  # Match messages that @mention the bot (by name, open_id, or app_id)
+# keywords = ["帮助", "help"]         # Match messages containing these keywords (OR, case-insensitive)
+# 
+# # You can also use sender rules (same as email):
+# # [channels.feishu_bot.patterns.rules.sender]
+# # exact = ["ou_abc123"]            # Match specific Feishu user open_ids
 
 [agent.opencode]
 # model = "SiliconFlow/Pro/zai-org/GLM-4.7"
 # small_model = "SiliconFlow/Qwen/Qwen2.5-7B-Instruct"
 system_prompt = "You are an AI assistant. Respond professionally and concisely."
 include_thread_history = true
-
-[agent.progress]
-enabled = false
-initial_delay_secs = 180
-interval_secs = 180
-max_messages = 5
 
 # Session summary configuration
 # Automatically generates summaries for long-running sessions
@@ -108,6 +107,15 @@ storage_dir = ".jyc/session-summaries"  # Directory to store summary files
 # enabled = true
 # max_file_size = "10mb"
 # allowed_extensions = [".ppt", ".pptx", ".doc", ".docx", ".txt", ".md"]
+
+# --- Heartbeat ---
+# Controls progress updates sent during long-running AI processing.
+# When enabled, periodic "still processing" updates are sent to the sender.
+
+[heartbeat]
+enabled = true
+interval_secs = 600                # Seconds between heartbeat updates (default: 600 = 10 min)
+min_elapsed_secs = 60              # Minimum processing time before first heartbeat (default: 60)
 
 # --- Alerting (optional) ---
 

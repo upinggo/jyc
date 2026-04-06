@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 
 use super::context::load_reply_context;
 use crate::channels::email::outbound::EmailOutboundAdapter;
-use crate::channels::types::OutboundAttachment;
+use crate::channels::feishu::outbound::FeishuOutboundAdapter;
+use crate::channels::types::{OutboundAdapter, OutboundAttachment};
 use crate::config;
 use crate::core::email_parser;
 use crate::core::message_storage::MessageStorage;
@@ -182,21 +183,37 @@ async fn handle_reply(
         sender, sender_address, topic, parsed.body.len()
     ));
 
-    // 7. Create outbound adapter (with storage for reply lifecycle)
+    // 7. Create outbound adapter based on channel type (with storage for reply lifecycle)
     let channel_config = app_config
         .channels
         .get(&ctx.channel)
         .ok_or_else(|| anyhow::anyhow!("channel '{}' not found in config", ctx.channel))?;
 
-    let smtp_config = channel_config
-        .outbound
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("no outbound config for channel '{}'", ctx.channel))?;
-
     let storage = Arc::new(MessageStorage::new(
         thread_path.parent().unwrap_or(thread_path),
     ));
-    let outbound = EmailOutboundAdapter::new(smtp_config, storage);
+
+    let outbound: Box<dyn OutboundAdapter> = match channel_config.channel_type.as_str() {
+        "email" => {
+            let smtp_config = channel_config
+                .outbound
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no outbound config for channel '{}'", ctx.channel))?;
+            Box::new(EmailOutboundAdapter::new(smtp_config, storage))
+        }
+        "feishu" => {
+            let feishu_config = channel_config
+                .feishu
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no feishu config for channel '{}'", ctx.channel))?
+                .clone();
+            Box::new(FeishuOutboundAdapter::new(feishu_config, storage))
+        }
+        other => {
+            anyhow::bail!("unsupported channel type '{}' for channel '{}'", other, ctx.channel);
+        }
+    };
+
     outbound.connect().await?;
 
     // 8. Reconstruct InboundMessage from stored metadata

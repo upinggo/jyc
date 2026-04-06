@@ -20,6 +20,14 @@ pub const RECOVERY_JUMP_THRESHOLD: u32 = 50;
 
 // --- SMTP ---
 pub const DEFAULT_SMTP_PORT: u16 = 465;
+/// Max retries for transient SMTP errors (4xx: 421, 451, 452)
+pub const SMTP_MAX_TRANSIENT_RETRIES: u32 = 3;
+/// Max retries for connection/timeout/TLS SMTP errors
+pub const SMTP_MAX_CONNECTION_RETRIES: u32 = 2;
+/// Base delay for SMTP retry backoff (seconds)
+pub const SMTP_RETRY_BASE_DELAY_SECS: u64 = 5;
+/// Maximum delay for SMTP retry backoff (seconds)
+pub const SMTP_RETRY_MAX_DELAY_SECS: u64 = 60;
 
 // --- OpenCode ---
 pub const OPENCODE_PORT_RANGE_START: u16 = 49152;
@@ -40,8 +48,8 @@ pub const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 pub const BLOCKING_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 // --- Heartbeat ---
-/// Default interval for heartbeat events (2 minutes)
-pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2 * 60);
+/// Default interval for heartbeat events (10 minutes — avoids SMTP rate limits)
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10 * 60);
 /// Minimum elapsed time before sending first heartbeat (1 minute)
 pub const MIN_HEARTBEAT_ELAPSED: Duration = Duration::from_secs(60);
 /// Minimum interval between heartbeats (30 seconds) to avoid flooding
@@ -62,11 +70,6 @@ pub const DEFAULT_REPLY_TOOL_LOG_TAIL_LINES: usize = 50;
 pub const DEFAULT_HEALTH_CHECK_INTERVAL_HOURS: f64 = 24.0;
 pub const ALERT_CONTEXT_WINDOW_SIZE: usize = 100;
 pub const ALERT_CONTEXT_LINES_PER_ERROR: usize = 10;
-
-// --- Progress ---
-pub const DEFAULT_PROGRESS_INITIAL_DELAY_SECS: u64 = 180;
-pub const DEFAULT_PROGRESS_INTERVAL_SECS: u64 = 180;
-pub const DEFAULT_PROGRESS_MAX_MESSAGES: usize = 5;
 
 // --- Attachments ---
 pub const DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE: usize = 10;

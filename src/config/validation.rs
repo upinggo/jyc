@@ -162,6 +162,28 @@ pub fn validate_config(config: &AppConfig) -> Vec<ValidationError> {
             for (i, pattern) in patterns.iter().enumerate() {
                 let pp = format!("{prefix}.patterns[{i}]");
                 validate_pattern(&pp, pattern, &mut errors);
+
+                // Feishu-specific pattern validation
+                if channel.channel_type == "feishu" && pattern.enabled {
+                    // Validate mentions list is non-empty if present
+                    if let Some(ref mentions) = pattern.rules.mentions {
+                        if mentions.is_empty() {
+                            errors.push(ValidationError {
+                                path: format!("{pp}.rules.mentions"),
+                                message: "mentions list must not be empty".into(),
+                            });
+                        }
+                    }
+                    // Validate keywords list is non-empty if present
+                    if let Some(ref keywords) = pattern.rules.keywords {
+                        if keywords.is_empty() {
+                            errors.push(ValidationError {
+                                path: format!("{pp}.rules.keywords"),
+                                message: "keywords list must not be empty".into(),
+                            });
+                        }
+                    }
+                }
             }
         }
     }
@@ -187,6 +209,28 @@ pub fn validate_config(config: &AppConfig) -> Vec<ValidationError> {
     // Validate agent attachment config
     if let Some(ref att) = config.agent.attachments {
         validate_attachment_config("agent.attachments", att, &mut errors);
+    }
+
+    // Heartbeat
+    if config.heartbeat.enabled {
+        if config.heartbeat.interval_secs == 0 {
+            errors.push(ValidationError {
+                path: "heartbeat.interval_secs".into(),
+                message: "must be at least 1 second".into(),
+            });
+        }
+        if config.heartbeat.interval_secs > 0 && config.heartbeat.interval_secs < 30 {
+            errors.push(ValidationError {
+                path: "heartbeat.interval_secs".into(),
+                message: "must be at least 30 seconds to avoid rate limits".into(),
+            });
+        }
+        if config.heartbeat.min_elapsed_secs == 0 {
+            errors.push(ValidationError {
+                path: "heartbeat.min_elapsed_secs".into(),
+                message: "must be at least 1 second".into(),
+            });
+        }
     }
 
     // Alerting

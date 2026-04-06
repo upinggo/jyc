@@ -8,14 +8,13 @@ use tracing::Instrument;
 
 use crate::core::thread_event_bus::{ThreadEventBusRef, SimpleThreadEventBus};
 
-use crate::channels::email::outbound::EmailOutboundAdapter;
-use crate::channels::types::{AttachmentConfig, InboundMessage, PatternMatch};
+use crate::channels::types::{AttachmentConfig, InboundMessage, OutboundAdapter, PatternMatch};
+use crate::config::types::HeartbeatConfig;
 use crate::core::command::handler::CommandContext;
 use crate::core::command::model_handler::ModelCommandHandler;
 use crate::core::command::mode_handler::{BuildCommandHandler, PlanCommandHandler};
 use crate::core::command::registry::CommandRegistry;
 use crate::core::command::reset_handler::ResetCommandHandler;
-use crate::core::email_parser;
 use crate::core::message_storage::{MessageStorage, StoreResult};
 use crate::services::agent::AgentService;
 
@@ -54,12 +53,15 @@ pub struct ThreadManager {
 
     // Shared dependencies
     storage: Arc<MessageStorage>,
-    outbound: Arc<EmailOutboundAdapter>,
+    outbound: Arc<dyn OutboundAdapter>,
     agent: Arc<dyn AgentService>,
 
     // Thread-isolated event buses (optional feature)
     event_buses: Mutex<HashMap<String, ThreadEventBusRef>>,
     enable_events: bool,
+
+    // Heartbeat configuration
+    heartbeat_config: HeartbeatConfig,
 
     cancel: CancellationToken,
     worker_handles: Mutex<Vec<JoinHandle<()>>>,
@@ -71,9 +73,10 @@ impl ThreadManager {
         max_concurrent: usize,
         max_queue_size: usize,
         storage: Arc<MessageStorage>,
-        outbound: Arc<EmailOutboundAdapter>,
+        outbound: Arc<dyn OutboundAdapter>,
         agent: Arc<dyn AgentService>,
         cancel: CancellationToken,
+        heartbeat_config: HeartbeatConfig,
     ) -> Self {
         Self::new_with_options(
             max_concurrent,
@@ -83,6 +86,7 @@ impl ThreadManager {
             agent,
             cancel,
             true, // enable_events: true by default (Thread Event system)
+            heartbeat_config,
         )
     }
     
@@ -91,10 +95,11 @@ impl ThreadManager {
         max_concurrent: usize,
         max_queue_size: usize,
         storage: Arc<MessageStorage>,
-        outbound: Arc<EmailOutboundAdapter>,
+        outbound: Arc<dyn OutboundAdapter>,
         agent: Arc<dyn AgentService>,
         cancel: CancellationToken,
         enable_events: bool,
+        heartbeat_config: HeartbeatConfig,
     ) -> Self {
         Self {
             thread_queues: Mutex::new(HashMap::new()),
@@ -105,6 +110,7 @@ impl ThreadManager {
             agent,
             event_buses: Mutex::new(HashMap::new()),
             enable_events,
+            heartbeat_config,
             cancel,
             worker_handles: Mutex::new(Vec::new()),
         }
@@ -215,6 +221,7 @@ impl ThreadManager {
         let storage = self.storage.clone();
         let outbound = self.outbound.clone();
         let agent = self.agent.clone();
+        let heartbeat_config = self.heartbeat_config.clone();
         let tm_span = tracing::info_span!("tm", t = %thread_name);
 
         tokio::spawn(async move {
@@ -234,29 +241,36 @@ impl ThreadManager {
             // Create a channel to pass the current message to the event listener
             let (current_message_tx, current_message_rx) = tokio::sync::watch::channel(None);
 
-            // Start event listener if event bus is provided
-            let event_listener_handle = if let Some(event_bus) = event_bus {
-                tracing::trace!(thread = %thread_name, "Creating event listener with heartbeat control");
-                let outbound_clone = outbound.clone();
-                let thread_name_clone = thread_name.clone();
-                let current_message_rx_clone = current_message_rx.clone();
-                
-                {
-                    let thread_name_for_finish = thread_name_clone.clone();
-                    Some(tokio::spawn(async move {
-                        tracing::trace!(thread = %thread_name_clone, "Event listener started");
-                        // Start event listener with heartbeat timing control
-                        Self::event_listener_with_heartbeat(
-                            event_bus,
-                            thread_name_clone,
-                            outbound_clone,
-                            current_message_rx_clone,
-                        ).await;
-                         tracing::trace!(thread = %thread_name_for_finish, "Event listener finished");
-                    }))
+            // Start event listener if event bus is provided and heartbeat is enabled
+            let event_listener_handle = if heartbeat_config.enabled {
+                if let Some(event_bus) = event_bus {
+                    tracing::trace!(thread = %thread_name, "Creating event listener with heartbeat control");
+                    let outbound_clone = outbound.clone();
+                    let thread_name_clone = thread_name.clone();
+                    let current_message_rx_clone = current_message_rx.clone();
+                    let hb_config = heartbeat_config.clone();
+                    
+                    {
+                        let thread_name_for_finish = thread_name_clone.clone();
+                        Some(tokio::spawn(async move {
+                            tracing::trace!(thread = %thread_name_clone, "Event listener started");
+                            // Start event listener with heartbeat timing control
+                            Self::event_listener_with_heartbeat(
+                                event_bus,
+                                thread_name_clone,
+                                outbound_clone,
+                                current_message_rx_clone,
+                                hb_config,
+                            ).await;
+                             tracing::trace!(thread = %thread_name_for_finish, "Event listener finished");
+                        }))
+                    }
+                } else {
+                    tracing::trace!(thread = %thread_name, "No event bus provided, event listener disabled");
+                    None
                 }
             } else {
-                tracing::trace!(thread = %thread_name, "No event bus provided, event listener disabled");
+                tracing::trace!(thread = %thread_name, "Heartbeat disabled by config");
                 None
             };
 
@@ -279,7 +293,7 @@ impl ThreadManager {
                     &item,
                     &thread_name,
                     &storage,
-                    &outbound,
+                    outbound.as_ref(),
                     agent.clone(),
                     &mut rx,
                 ).await {
@@ -315,16 +329,26 @@ impl ThreadManager {
         }
     }
     
-    /// Event listener that controls heartbeat timing based on HEARTBEAT_INTERVAL.
+    /// Event listener that controls heartbeat timing based on HeartbeatConfig.
     /// Each thread has its own isolated event listener.
     async fn event_listener_with_heartbeat(
         event_bus: crate::core::thread_event_bus::ThreadEventBusRef,
         thread_name: String,
-        outbound: Arc<crate::channels::email::outbound::EmailOutboundAdapter>,
+        outbound: Arc<dyn OutboundAdapter>,
         current_message_rx: tokio::sync::watch::Receiver<Option<crate::channels::types::InboundMessage>>,
+        heartbeat_config: HeartbeatConfig,
     ) {
     use std::time::{Instant, Duration};
-    use crate::utils::constants::{HEARTBEAT_INTERVAL, MIN_HEARTBEAT_ELAPSED};
+    
+    let heartbeat_interval = Duration::from_secs(heartbeat_config.interval_secs);
+    let min_heartbeat_elapsed = Duration::from_secs(heartbeat_config.min_elapsed_secs);
+
+    tracing::debug!(
+        thread = %thread_name,
+        interval_secs = heartbeat_config.interval_secs,
+        min_elapsed_secs = heartbeat_config.min_elapsed_secs,
+        "Heartbeat config loaded"
+    );
     
     // Subscribe to this thread's event bus
     let mut receiver = match event_bus.subscribe().await {
@@ -340,7 +364,7 @@ impl ThreadManager {
     let mut last_processing_state: Option<(u64, String, String)> = None; // (elapsed_secs, activity, progress)
     
     // Heartbeat timer for this thread
-    let mut heartbeat_timer = tokio::time::interval(HEARTBEAT_INTERVAL);
+    let mut heartbeat_timer = tokio::time::interval(heartbeat_interval);
     heartbeat_timer.tick().await; // Skip immediate tick
     
     loop {
@@ -404,18 +428,18 @@ impl ThreadManager {
                         );
                         // Check minimum elapsed time
                         let processing_elapsed = Duration::from_secs(*elapsed_secs);
-                        if processing_elapsed < MIN_HEARTBEAT_ELAPSED {
+                        if processing_elapsed < min_heartbeat_elapsed {
                         tracing::trace!(
                             thread = %thread_name,
                             elapsed_secs = elapsed_secs,
-                            "Processing just started, skipping heartbeat (elapsed < MIN_HEARTBEAT_ELAPSED)"
+                            "Processing just started, skipping heartbeat (elapsed < min_elapsed_secs)"
                         );
                             continue;
                         }
                         
                         // Check heartbeat interval
                         let should_send = match last_heartbeat_sent {
-                            Some(last_sent) => last_sent.elapsed() >= HEARTBEAT_INTERVAL,
+                            Some(last_sent) => last_sent.elapsed() >= heartbeat_interval,
                             None => true, // First heartbeat
                         };
                         
@@ -534,7 +558,7 @@ async fn process_message(
     item: &QueueItem,
     thread_name: &str,
     storage: &MessageStorage,
-    outbound: &EmailOutboundAdapter,
+    outbound: &dyn OutboundAdapter,
     agent: Arc<dyn AgentService>,
     pending_rx: &mut mpsc::Receiver<QueueItem>,
 ) -> Result<()> {
@@ -600,7 +624,7 @@ async fn process_message(
     }
 
     // ── 4. CHECK BODY ─────────────────────────────────────────────────
-    let cleaned_body = email_parser::strip_quoted_history(&cmd_output.cleaned_body);
+    let cleaned_body = outbound.clean_body(&cmd_output.cleaned_body);
     let effective_body_empty = cleaned_body.trim().is_empty();
 
     tracing::debug!(

@@ -122,7 +122,7 @@ impl ServerHandler for ReplyToolHandler {
 ///
 /// This tool no longer sends messages directly. It only:
 /// 1. Validates the reply text and attachments
-/// 2. Stores reply.md via MessageStorage
+/// 2. Stores the reply in the chat log via MessageStorage
 /// 3. Writes the reply-sent.flag signal file with reply metadata
 ///
 /// The actual message delivery (SMTP, Feishu API, etc.) is handled by the
@@ -157,14 +157,14 @@ async fn handle_reply(
         vec![]
     };
 
-    // 5. Store reply.md to disk (the monitor process will read this and send)
+    // 5. Store reply to chat log (the monitor process will deliver this)
     let storage = Arc::new(MessageStorage::new(
         thread_path.parent().unwrap_or(thread_path),
     ));
     storage
         .store_reply(thread_path, message, &ctx.incoming_message_dir)
         .await?;
-    logger.log("INFO", "Reply stored to reply.md");
+    logger.log("INFO", "Reply stored to chat log");
 
     // 6. Write signal file with reply metadata
     //    The monitor process reads this to know a reply is ready for delivery.

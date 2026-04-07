@@ -2,19 +2,16 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 
-use crate::channels::types::{AttachmentConfig, InboundMessage, MessageAttachment};
-use crate::utils::helpers::parse_file_size;
+use crate::channels::types::{AttachmentConfig, InboundMessage};
 
 /// Result of storing a message.
 #[derive(Debug, Clone)]
 pub struct StoreResult {
     /// Full path to the thread directory
     pub thread_path: PathBuf,
-    /// Name of the message directory (e.g., "2026-03-19_23-02-20")
+    /// Timestamp identifier for this message (e.g., "2026-03-19_23-02-20").
+    /// Used as a correlation key in reply context and outbound adapters.
     pub message_dir: String,
-    /// Full path to the message directory
-    #[allow(dead_code)]
-    pub message_path: PathBuf,
 }
 
 /// Persist messages and replies as markdown files per thread.
@@ -33,7 +30,6 @@ impl MessageStorage {
     /// Store an inbound message with match status.
     ///
     /// Appends the message to the chat log (log-based storage).
-    /// Directory-based storage is deprecated and will be removed.
     pub async fn store_with_match(
         &self,
         message: &InboundMessage,
@@ -43,14 +39,12 @@ impl MessageStorage {
     ) -> Result<StoreResult> {
         let thread_path = self.workspace.join(thread_name);
         
-        // Generate a timestamp for backward compatibility
+        // Generate a timestamp identifier for this message
         let message_dir = Utc::now().format("%Y-%m-%d_%H-%M-%S").to_string();
         
-        // Note: Attachments are no longer saved in directory-based storage
-        // Log-based storage doesn't support attachments directly
-        // TODO: Consider attachment handling for log storage
+        // TODO: Consider attachment handling for log-based storage
         
-        // Append to chat log (primary storage)
+        // Append to chat log
         self.append_to_chat_log(&thread_path, message, is_matched).await?;
 
         tracing::info!(
@@ -59,11 +53,10 @@ impl MessageStorage {
             "Message stored to chat log"
         );
 
-        // Return minimal StoreResult for backward compatibility
+        // Return minimal StoreResult
         Ok(StoreResult {
             thread_path: thread_path.clone(),
             message_dir,
-            message_path: thread_path.join("messages").join("dummy"), // dummy path
         })
     }
 
@@ -81,17 +74,14 @@ impl MessageStorage {
 
     /// Store a reply for an existing message.
     ///
-    /// Appends the reply to the chat log (log-based storage).
-    /// Directory-based storage is deprecated and will be removed.
+    /// Appends the reply to the chat log.
     pub async fn store_reply(
         &self,
         thread_path: &Path,
         reply_text: &str,
         message_dir: &str,
     ) -> Result<()> {
-        // Note: Directory-based reply.md file is no longer created
-        
-        // Append to chat log (primary storage)
+        // Append to chat log
         self.append_reply_to_chat_log(thread_path, reply_text, message_dir).await?;
         
         tracing::debug!("Reply stored to chat log");
@@ -141,111 +131,7 @@ impl MessageStorage {
         Ok(())
     }
 
-    // Note: make_message_dir_name() removed - directory-based storage deprecated
-
-    /// Save allowed attachments to the message directory.
-    async fn save_attachments(
-        &self,
-        attachments: &[MessageAttachment],
-        message_path: &Path,
-        config: &AttachmentConfig,
-    ) -> Result<Vec<SavedAttachment>> {
-        let max_size = config
-            .max_file_size
-            .as_deref()
-            .map(parse_file_size)
-            .transpose()?;
-        let max_count = config.max_per_message.unwrap_or(10);
-        let allowed_ext: Vec<String> = config
-            .allowed_extensions
-            .iter()
-            .map(|e| e.to_lowercase())
-            .collect();
-
-        let mut saved = Vec::new();
-
-        for att in attachments {
-            if saved.len() >= max_count {
-                tracing::debug!(
-                    filename = %att.filename,
-                    "Skipping attachment: max count reached"
-                );
-                break;
-            }
-
-            // Check extension
-            let ext = Path::new(&att.filename)
-                .extension()
-                .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
-                .unwrap_or_default();
-
-            if !allowed_ext.is_empty() && !allowed_ext.contains(&ext) {
-                tracing::debug!(
-                    filename = %att.filename,
-                    ext = %ext,
-                    "Skipping attachment: extension not allowed"
-                );
-                saved.push(SavedAttachment {
-                    filename: att.filename.clone(),
-                    content_type: att.content_type.clone(),
-                    size: att.size,
-                    status: "skipped".to_string(),
-                    path: None,
-                });
-                continue;
-            }
-
-            // Check size
-            if let Some(max) = max_size {
-                if att.size as u64 > max {
-                    tracing::debug!(
-                        filename = %att.filename,
-                        size = att.size,
-                        max = max,
-                        "Skipping attachment: too large"
-                    );
-                    saved.push(SavedAttachment {
-                        filename: att.filename.clone(),
-                        content_type: att.content_type.clone(),
-                        size: att.size,
-                        status: "skipped".to_string(),
-                        path: None,
-                    });
-                    continue;
-                }
-            }
-
-            // Sanitize filename (basename only, no traversal)
-            let safe_name = sanitize_attachment_filename(&att.filename);
-            let target = resolve_collision(message_path, &safe_name).await;
-
-            if let Some(ref content) = att.content {
-                tokio::fs::write(&target, content)
-                    .await
-                    .with_context(|| {
-                        format!("failed to save attachment: {}", target.display())
-                    })?;
-
-                tracing::debug!(
-                    filename = %safe_name,
-                    size = att.size,
-                    "Attachment saved"
-                );
-
-                saved.push(SavedAttachment {
-                    filename: att.filename.clone(),
-                    content_type: att.content_type.clone(),
-                    size: att.size,
-                    status: "saved".to_string(),
-                    path: Some(target),
-                });
-            }
-        }
-
-        Ok(saved)
-    }
-
-    /// Format a received.md file with YAML frontmatter.
+    /// Format a received message with YAML frontmatter (legacy format).
     fn format_received_md(
         &self,
         message: &InboundMessage,
@@ -318,7 +204,7 @@ impl MessageStorage {
     }
 }
 
-/// A saved (or skipped) attachment record for inclusion in received.md.
+/// A saved (or skipped) attachment record.
 #[derive(Debug)]
 struct SavedAttachment {
     filename: String,
@@ -424,8 +310,7 @@ mod tests {
         let result = storage.store(&msg, "test-thread", None).await.unwrap();
 
         assert!(result.thread_path.exists());
-        // Note: result.message_path is now a dummy path, no longer exists
-        // Log-based storage is the primary storage
+        // Log-based storage is the primary storage — verify function returns without error
 
         // For log-based storage, we can't verify file content easily in tests
         // The actual storage is done through ChatLogStore
@@ -444,9 +329,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Note: reply.md is no longer created in directory-based storage
-        // Log-based storage is the primary storage
-        // This test now verifies the function returns without error
+        // Reply is appended to chat log — verify function returns without error
     }
 
     #[test]

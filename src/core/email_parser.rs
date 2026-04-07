@@ -155,7 +155,7 @@ pub fn truncate_text(text: &str, max_chars: usize) -> String {
     format!("{}...", &text[..end])
 }
 
-/// Parse a stored received.md file, extracting all frontmatter and body.
+/// Parse a stored message file (legacy format), extracting all frontmatter and body.
 #[derive(Debug)]
 pub struct ParsedStoredMessage {
     pub sender: Option<String>,
@@ -175,7 +175,7 @@ pub struct ParsedStoredMessage {
     pub matched_pattern: Option<String>,
 }
 
-/// Parse a stored received.md file.
+/// Parse a stored message file (legacy format).
 ///
 /// Expected format:
 /// ```text
@@ -300,7 +300,7 @@ pub fn parse_stored_message(content: &str) -> ParsedStoredMessage {
     }
 }
 
-/// Parse a stored reply.md file, extracting only the AI's response text.
+/// Parse a stored reply file (legacy format), extracting only the AI's response text.
 ///
 /// Stops before quoted history blocks (lines starting with `### ` that look
 /// like quoted reply headers, or `---` dividers).
@@ -654,7 +654,11 @@ pub async fn build_thread_trail(
         return log_trail;
     }
     
-    // Fallback to directory-based storage
+    // Fallback to directory-based storage (legacy threads only)
+    tracing::warn!(
+        thread = %thread_path.display(),
+        "build_thread_trail: no chat log entries found, falling back to legacy messages/ directory"
+    );
     let mut trail = Vec::new();
 
     // Prepend current message (stripped) if provided

@@ -140,7 +140,7 @@ impl crate::channels::types::OutboundAdapter for FeishuOutboundAdapter {
             }
         }
 
-        // 3. Store reply.md
+        // 3. Store reply to chat log
         self.storage
             .store_reply(thread_path, reply_text, message_dir)
             .await?;

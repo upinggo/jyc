@@ -91,7 +91,7 @@ impl OpenCodeClient {
             };
             let thread_name = event.thread_name();
             
-            tracing::debug!(
+            tracing::trace!(
                 event_type = %event_type,
                 thread_name = %thread_name,
                 "Spawning async task to publish thread event"

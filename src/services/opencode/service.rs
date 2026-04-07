@@ -253,11 +253,10 @@ impl OpenCodeService {
         // Sessions are only deleted for error recovery:
         // - ContextOverflow (handle_sse_result)
         // - Stale session detection (handle_sse_result)
-        // - Session timeout (with summary generation)
+        // - Session timeout (active time based reset)
         let session_id = session::get_or_create_session(
             &client, 
             thread_path,
-            Some(&self.agent_config.summary),
         ).await?;
 
         // 4. Clean up stale signal file
@@ -312,14 +311,11 @@ impl OpenCodeService {
         }
 
         // 7. Check for session summaries
-        let has_session_summary = session::has_session_summaries(thread_path).await;
-        
         // 8. Build prompts
         let system_prompt = prompt_builder::build_system_prompt(
             thread_path,
             self.agent_config.opencode.as_ref().and_then(|o| o.system_prompt.as_deref()),
             agent_mode.as_deref(),
-            has_session_summary,
         );
 
         let user_prompt = prompt_builder::build_prompt(

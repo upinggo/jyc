@@ -1572,22 +1572,19 @@ The agent relies on OpenCode's built-in session memory for multi-turn conversati
    - Session is deleted on config change (model switch) or ContextOverflow
    - New session created on server restart
 
-2. **Session Summary System** — Automatic summarization of long-running sessions
-   - **Dual timeout conditions**:
-     - Active time timeout: Session accumulates active time (`total_active_time`) during AI processing
-     - When accumulated time exceeds `timeout_hours` (default 2h), session is summarized
-     - Idle time timeout: When session has low active time but idle for too long (`max_idle_hours`, default 120h)
+2. **Session Timeout Management** — Automatic session reset for long-running sessions
+   - **Active time based reset**:
+     - Session accumulates active time (`total_active_time`) during AI processing
+     - When accumulated time exceeds maximum active time (default 1h), session is reset
+     - Old session is deleted and a new session is created
    - **Active time tracking**:
      - `start_active_time_tracking()` called when AI processing begins
      - `stop_active_time_tracking()` called when AI processing completes
      - Active duration accumulated to `total_active_time` in session state
-   - **Summary generation**:
-     - Session summary saved as markdown file in `.jyc/session-summaries/`
-     - Includes session metadata, duration, message count, and trigger reason
-     - Old summaries cleaned up (keep latest `max_summaries` files)
-   - **System prompt integration**:
-     - When session summaries exist, system prompt includes notification
-     - AI can refer to previous session summaries for context continuity
+   - **Context preservation**:
+     - Chat history is preserved in `chat_history_YYYY-MM-DD.md` files
+     - AI can read chat history for context continuity
+     - No session summaries are generated or stored
 
 3. **Session State Data Structure** (`src/services/opencode/session.rs`)
    ```rust
@@ -1937,12 +1934,7 @@ model = "SiliconFlow/Pro/zai-org/GLM-4.7"
 small_model = "SiliconFlow/Qwen/Qwen2.5-7B-Instruct"
 system_prompt = "You are an AI assistant. Respond professionally and concisely."
 
-[agent.summary]
-enabled = true
-timeout_hours = 2.0              # Maximum accumulated active time before summary (hours)
-max_idle_hours = 120.0           # Maximum idle time before summary when active time is low (hours)
-max_summaries = 50               # Maximum number of summary files to keep
-storage_dir = ".jyc/session-summaries"  # Directory to store summary files
+
 
 [agent.attachments]
 enabled = true

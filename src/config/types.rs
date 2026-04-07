@@ -156,10 +156,6 @@ pub struct AgentConfig {
 
     /// Outbound attachment configuration
     pub attachments: Option<AttachmentConfig>,
-
-    /// Session summary configuration
-    #[serde(default)]
-    pub summary: SessionSummaryConfig,
 }
 
 /// OpenCode AI service configuration.
@@ -173,30 +169,6 @@ pub struct OpenCodeConfig {
 
     /// System prompt for the AI
     pub system_prompt: Option<String>,
-}
-
-/// Session summary configuration.
-#[derive(Debug, Clone, Deserialize)]
-pub struct SessionSummaryConfig {
-    /// Whether session summary is enabled
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Session timeout threshold in hours (legacy - maximum active time)
-    #[serde(default = "default_1_0")]
-    pub timeout_hours: f64,
-
-    /// Maximum idle time in hours before summary (when active time is low)
-    #[serde(default = "default_120_0")]
-    pub max_idle_hours: f64,
-
-    /// Maximum number of summary files to keep
-    #[serde(default = "default_50")]
-    pub max_summaries: usize,
-
-    /// Storage directory for session summaries (relative to thread directory)
-    #[serde(default = "default_session_summaries_dir")]
-    pub storage_dir: String,
 }
 
 /// Alerting configuration — error digests and health checks.
@@ -334,20 +306,4 @@ fn default_1_0() -> f64 {
 
 fn default_120_0() -> f64 {
     120.0
-}
-
-fn default_session_summaries_dir() -> String {
-    ".jyc/session-summaries".to_string()
-}
-
-impl Default for SessionSummaryConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_true(),
-            timeout_hours: default_1_0(),
-            max_idle_hours: default_120_0(),
-            max_summaries: default_50(),
-            storage_dir: default_session_summaries_dir(),
-        }
-    }
 }

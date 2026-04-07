@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use super::client::OpenCodeClient;
-use crate::config::types::{AgentConfig, SessionSummaryConfig};
+use crate::config::types::AgentConfig;
 
 /// Per-thread session state, persisted in `.jyc/opencode-session.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,79 +26,20 @@ pub struct SessionState {
     pub last_active_start: Option<String>,
 }
 
-/// Session summary data structure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionSummary {
-    /// Session ID
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
 
-    /// Thread name
-    pub thread_name: String,
 
-    /// Session start time (ISO 8601)
-    pub start_time: String,
 
-    /// Session end time (ISO 8601)
-    pub end_time: String,
-
-    /// Session duration in seconds
-    pub duration_secs: u64,
-
-    /// Number of messages in this session
-    pub message_count: usize,
-
-    /// Key topics discussed (3-5 bullet points)
-    pub key_topics: Vec<String>,
-
-    /// Trigger reason for summary generation
-    pub trigger_reason: TriggerReason,
-}
-
-/// Reason for generating a session summary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TriggerReason {
-    /// Session timeout (inactivity threshold exceeded)
-    Timeout { threshold_hours: f64 },
-    /// Session active time exceeded maximum allowed
-    ActiveTimeExceeded {
-        total_active_hours: f64,
-        max_active_hours: f64,
-    },
-    /// Session creation (new session created)
-    SessionCreation,
-    /// Session deletion (session deleted)
-    SessionDeletion,
-    /// Context overflow recovery
-    ContextOverflow,
-    /// Manual trigger
-    Manual,
-}
-
-/// Session summary statistics for monitoring.
-#[derive(Debug, Clone)]
-pub struct SessionStats {
-    /// Total number of messages
-    pub total_messages: usize,
-    /// Number of attachments
-    pub attachment_count: usize,
-    /// Session duration in hours
-    pub duration_hours: f64,
-    /// Whether session had errors
-    pub had_errors: bool,
-}
 
 /// Get or create a session for a thread.
 ///
 /// 1. Read `.jyc/opencode-session.json`
-/// 2. Check if session should be summarized due to timeout
-/// 3. If timeout → generate summary, create new session
+/// 2. Check if session has exceeded maximum active time (default: 1 hour)
+/// 3. If exceeded → delete old session and create new one
 /// 4. Verify session still exists via API
 /// 5. If missing → create new session
 pub async fn get_or_create_session(
     client: &OpenCodeClient,
     thread_path: &Path,
-    summary_config: Option<&SessionSummaryConfig>,
 ) -> Result<String> {
     let state_path = thread_path.join(".jyc").join("opencode-session.json");
 
@@ -106,79 +47,21 @@ pub async fn get_or_create_session(
     if state_path.exists() {
         if let Ok(content) = tokio::fs::read_to_string(&state_path).await {
             if let Ok(state) = serde_json::from_str::<SessionState>(&content) {
-                // Check if session should be summarized due to timeout
-                if let Some(config) = summary_config {
-                    if config.enabled {
-                        // Use new function with both active time and idle time thresholds
-                        match should_summarize_session_by_active_time(
-                            &state,
-                            config.timeout_hours,
-                            config.max_idle_hours,
-                        ) {
-                            Ok(true) => {
-                                let (trigger_reason, log_message) = if state.total_active_time
-                                    >= (config.timeout_hours * 3600.0) as u64
-                                {
-                                    // Session exceeded maximum active time
-                                    (
-                                        TriggerReason::ActiveTimeExceeded {
-                                            total_active_hours: state.total_active_time as f64
-                                                / 3600.0,
-                                            max_active_hours: config.timeout_hours,
-                                        },
-                                        format!(
-                                            "Session active time exceeded ({}h total, {}h max)",
-                                            state.total_active_time as f64 / 3600.0,
-                                            config.timeout_hours
-                                        ),
-                                    )
-                                } else {
-                                    // Session exceeded maximum idle time
-                                    (
-                                        TriggerReason::Timeout {
-                                            threshold_hours: config.max_idle_hours,
-                                        },
-                                        format!(
-                                            "Session idle time exceeded (max {}h)",
-                                            config.max_idle_hours
-                                        ),
-                                    )
-                                };
+                // Check if session has exceeded maximum active time (1 hour default)
+                const MAX_ACTIVE_HOURS: f64 = 1.0;
+                let max_active_secs = (MAX_ACTIVE_HOURS * 3600.0) as u64;
+                
+                if state.total_active_time >= max_active_secs {
+                    tracing::info!(
+                        session_id = %state.session_id,
+                        total_active_time = state.total_active_time,
+                        max_active_secs = max_active_secs,
+                        "Session exceeded maximum active time, resetting"
+                    );
 
-                                tracing::info!(
-                                    session_id = %state.session_id,
-                                    reason = %log_message,
-                                    "Session summary triggered"
-                                );
-
-                                // Generate and save session summary
-                                let summary = create_basic_session_summary(
-                                    thread_path,
-                                    &state,
-                                    trigger_reason,
-                                )
-                                .await?;
-
-                                save_session_summary(thread_path, &summary, config).await?;
-
-                                // Clean up old summaries
-                                cleanup_old_summaries(thread_path, config.max_summaries).await?;
-
-                                // Delete old session and create new one
-                                delete_session(thread_path).await?;
-                                return create_new_session(client, thread_path).await;
-                            }
-                            Ok(false) => {
-                                // Session not timed out, continue verification
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    "Failed to check session timeout, continuing"
-                                );
-                            }
-                        }
-                    }
+                    // Delete old session and create new one
+                    delete_session(thread_path).await?;
+                    return create_new_session(client, thread_path).await;
                 }
 
                 // Verify session still exists
@@ -445,58 +328,9 @@ fn get_reply_tool_command() -> Vec<String> {
     vec!["jyc".to_string(), "mcp-reply-tool".to_string()]
 }
 
-/// Check if a session should be summarized based on timeout (legacy - uses last used time).
-pub fn should_summarize_session(state: &SessionState, timeout_hours: f64) -> Result<bool> {
-    let last_used = chrono::DateTime::parse_from_rfc3339(&state.last_used_at)
-        .context("failed to parse last_used_at timestamp")?;
 
-    let now = chrono::Utc::now();
-    let elapsed = now.signed_duration_since(last_used);
 
-    let timeout_secs = (timeout_hours * 3600.0) as i64;
-    Ok(elapsed.num_seconds() > timeout_secs)
-}
 
-/// Check if a session should be summarized based on accumulated active time.
-pub fn should_summarize_session_by_active_time(
-    state: &SessionState,
-    max_active_hours: f64,
-    max_idle_hours: f64,
-) -> Result<bool> {
-    // First check if session has exceeded maximum active time
-    let max_active_secs = (max_active_hours * 3600.0) as u64;
-    if state.total_active_time >= max_active_secs {
-        tracing::debug!(
-            session_id = %state.session_id,
-            total_active_time = state.total_active_time,
-            max_active_secs = max_active_secs,
-            "Session exceeded maximum active time"
-        );
-        return Ok(true);
-    }
-
-    // Then check if session has been idle for too long
-    let last_used = chrono::DateTime::parse_from_rfc3339(&state.last_used_at)
-        .context("failed to parse last_used_at timestamp")?;
-
-    let now = chrono::Utc::now();
-    let idle_time = now.signed_duration_since(last_used);
-
-    let max_idle_secs = (max_idle_hours * 3600.0) as i64;
-    let should_summarize = idle_time.num_seconds() > max_idle_secs;
-
-    if should_summarize {
-        tracing::debug!(
-            session_id = %state.session_id,
-            idle_seconds = idle_time.num_seconds(),
-            max_idle_secs = max_idle_secs,
-            total_active_time = state.total_active_time,
-            "Session exceeded maximum idle time"
-        );
-    }
-
-    Ok(should_summarize)
-}
 
 /// Calculate session duration in seconds.
 pub fn calculate_session_duration(state: &SessionState) -> Result<u64> {
@@ -509,207 +343,17 @@ pub fn calculate_session_duration(state: &SessionState) -> Result<u64> {
     Ok(duration.num_seconds().max(0) as u64)
 }
 
-/// Get the session summary directory path.
-pub fn get_summary_dir(thread_path: &Path) -> std::path::PathBuf {
-    thread_path.join(".jyc").join("session-summaries")
-}
 
-/// Generate a summary file name based on timestamp.
-pub fn generate_summary_filename() -> String {
-    let now = chrono::Utc::now();
-    format!("{}.md", now.format("%Y-%m-%d_%H-%M-%S"))
-}
 
-/// Get the full path for a summary file.
-pub fn get_summary_path(thread_path: &Path, filename: &str) -> std::path::PathBuf {
-    get_summary_dir(thread_path).join(filename)
-}
 
-/// Save a session summary to a markdown file.
-pub async fn save_session_summary(
-    thread_path: &Path,
-    summary: &SessionSummary,
-    config: &crate::config::types::SessionSummaryConfig,
-) -> Result<String> {
-    let summary_dir = get_summary_dir(thread_path);
-    tokio::fs::create_dir_all(&summary_dir)
-        .await
-        .context("failed to create summary directory")?;
 
-    let filename = generate_summary_filename();
-    let filepath = get_summary_path(thread_path, &filename);
 
-    // Format summary as markdown
-    let content = format_session_summary_markdown(summary);
 
-    tokio::fs::write(&filepath, &content)
-        .await
-        .context("failed to write summary file")?;
 
-    // Clean up old summaries if needed
-    cleanup_old_summaries(thread_path, config.max_summaries).await?;
 
-    tracing::info!(
-        path = %filepath.display(),
-        "Session summary saved"
-    );
 
-    Ok(filename)
-}
 
-/// Format a session summary as markdown with YAML frontmatter.
-fn format_session_summary_markdown(summary: &SessionSummary) -> String {
-    let mut content = String::new();
 
-    // YAML frontmatter
-    content.push_str("---\n");
-    content.push_str(&format!("session_id: {}\n", summary.session_id));
-    content.push_str(&format!("thread_name: {}\n", summary.thread_name));
-    content.push_str(&format!("start_time: {}\n", summary.start_time));
-    content.push_str(&format!("end_time: {}\n", summary.end_time));
-    content.push_str(&format!("duration_secs: {}\n", summary.duration_secs));
-    content.push_str(&format!("message_count: {}\n", summary.message_count));
-    content.push_str(&format!("trigger_reason: {:?}\n", summary.trigger_reason));
-    content.push_str("---\n\n");
-
-    // Title
-    content.push_str(&format!("# 会话总结: {}\n\n", summary.thread_name));
-
-    // Key topics
-    if !summary.key_topics.is_empty() {
-        content.push_str("## 关键摘要\n\n");
-        for topic in &summary.key_topics {
-            content.push_str(&format!("- {}\n", topic));
-        }
-        content.push_str("\n");
-    }
-
-    // Session metadata
-    content.push_str("## 会话元数据\n\n");
-    content.push_str(&format!("- **会话ID**: {}\n", summary.session_id));
-    content.push_str(&format!("- **线程名称**: {}\n", summary.thread_name));
-    content.push_str(&format!("- **开始时间**: {}\n", summary.start_time));
-    content.push_str(&format!("- **结束时间**: {}\n", summary.end_time));
-    content.push_str(&format!(
-        "- **持续时间**: {:.2} 小时\n",
-        summary.duration_secs as f64 / 3600.0
-    ));
-    content.push_str(&format!("- **消息数量**: {}\n", summary.message_count));
-    content.push_str(&format!("- **触发原因**: {:?}\n", summary.trigger_reason));
-
-    content
-}
-
-/// Check if there are any session summary files in the thread.
-pub async fn has_session_summaries(thread_path: &Path) -> bool {
-    let summary_dir = get_summary_dir(thread_path);
-    if !summary_dir.exists() {
-        return false;
-    }
-
-    match tokio::fs::read_dir(&summary_dir).await {
-        Ok(mut read_dir) => {
-            while let Ok(Some(entry)) = read_dir.next_entry().await {
-                if let Ok(file_type) = entry.file_type().await {
-                    if file_type.is_file() && entry.file_name().to_string_lossy().ends_with(".md") {
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-        Err(_) => false,
-    }
-}
-
-/// Clean up old summary files, keeping only the latest N files.
-pub async fn cleanup_old_summaries(thread_path: &Path, max_summaries: usize) -> Result<()> {
-    let summary_dir = get_summary_dir(thread_path);
-    if !summary_dir.exists() || max_summaries == 0 {
-        return Ok(());
-    }
-
-    let mut entries = Vec::new();
-    let mut read_dir = tokio::fs::read_dir(&summary_dir).await?;
-
-    while let Some(entry) = read_dir.next_entry().await? {
-        if entry.file_type().await?.is_file() {
-            let metadata = entry.metadata().await?;
-            let modified = metadata.modified()?;
-            entries.push((entry.path(), modified));
-        }
-    }
-
-    // Sort by modification time (newest first)
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
-
-    // Remove files beyond the limit
-    if entries.len() > max_summaries {
-        for (path, _) in entries.into_iter().skip(max_summaries) {
-            if let Err(e) = tokio::fs::remove_file(&path).await {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %e,
-                    "Failed to remove old summary file"
-                );
-            } else {
-                tracing::debug!(
-                    path = %path.display(),
-                    "Removed old session summary"
-                );
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Load a session summary from a file.
-pub async fn load_session_summary(thread_path: &Path, filename: &str) -> Result<SessionSummary> {
-    let filepath = get_summary_path(thread_path, filename);
-    let content = tokio::fs::read_to_string(&filepath)
-        .await
-        .context("failed to read summary file")?;
-
-    // Parse YAML frontmatter
-    parse_session_summary_markdown(&content)
-}
-
-/// Parse a session summary from markdown content.
-fn parse_session_summary_markdown(content: &str) -> Result<SessionSummary> {
-    // Simple parsing for now - in a real implementation, we would use a proper YAML parser
-    // This is a simplified version for the initial implementation
-    let lines: Vec<&str> = content.lines().collect();
-
-    // Find YAML frontmatter boundaries
-    let mut in_frontmatter = false;
-    let mut frontmatter_lines = Vec::new();
-
-    for line in lines {
-        if line == "---" {
-            if !in_frontmatter {
-                in_frontmatter = true;
-            } else {
-                break; // End of frontmatter
-            }
-        } else if in_frontmatter {
-            frontmatter_lines.push(line);
-        }
-    }
-
-    // For now, return a basic summary
-    // TODO: Implement proper YAML parsing
-    Ok(SessionSummary {
-        session_id: "unknown".to_string(),
-        thread_name: "unknown".to_string(),
-        start_time: chrono::Utc::now().to_rfc3339(),
-        end_time: chrono::Utc::now().to_rfc3339(),
-        duration_secs: 0,
-        message_count: 0,
-        key_topics: vec!["Summary loaded from file".to_string()],
-        trigger_reason: TriggerReason::Manual,
-    })
-}
 
 /// Count messages in the thread by scanning chat log files.
 ///
@@ -757,45 +401,7 @@ pub async fn count_messages(thread_path: &Path) -> Result<usize> {
 }
 
 /// Create a basic session summary from session state.
-pub async fn create_basic_session_summary(
-    thread_path: &Path,
-    state: &SessionState,
-    trigger_reason: TriggerReason,
-) -> Result<SessionSummary> {
-    let thread_name = thread_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
 
-    let message_count = count_messages(thread_path).await.unwrap_or(0);
-    let duration_secs = calculate_session_duration(state).unwrap_or(0);
-
-    // Generate basic key topics
-    let mut key_topics = Vec::new();
-    if message_count > 0 {
-        key_topics.push(format!("处理了 {} 条消息", message_count));
-    }
-    if duration_secs > 0 {
-        let hours = duration_secs as f64 / 3600.0;
-        key_topics.push(format!("会话持续了 {:.2} 小时", hours));
-    }
-
-    // Ensure we have at least some topics
-    if key_topics.is_empty() {
-        key_topics.push("会话正常结束".to_string());
-    }
-
-    Ok(SessionSummary {
-        session_id: state.session_id.clone(),
-        thread_name,
-        start_time: state.created_at.clone(),
-        end_time: chrono::Utc::now().to_rfc3339(),
-        duration_secs,
-        message_count,
-        key_topics,
-        trigger_reason,
-    })
-}
 
 // --- Signal file ---
 
@@ -866,97 +472,9 @@ mod tests {
         assert_eq!(cmd.last().unwrap(), "mcp-reply-tool");
     }
 
-    #[test]
-    fn test_should_summarize_session() {
-        let now = chrono::Utc::now();
-        let two_hours_ago = now - chrono::Duration::hours(2) - chrono::Duration::minutes(1);
 
-        let state = SessionState {
-            session_id: "test-session".to_string(),
-            created_at: now.to_rfc3339(),
-            last_used_at: two_hours_ago.to_rfc3339(),
-            total_active_time: 0,
-            last_active_start: None,
-        };
 
-        // Should summarize when idle for > 2 hours
-        let should = should_summarize_session(&state, 2.0).unwrap();
-        assert!(should, "Session idle for >2 hours should be summarized");
 
-        // Should not summarize when idle for < 2 hours
-        let one_hour_ago = now - chrono::Duration::hours(1);
-        let state_recent = SessionState {
-            session_id: "test-session".to_string(),
-            created_at: now.to_rfc3339(),
-            last_used_at: one_hour_ago.to_rfc3339(),
-            total_active_time: 0,
-            last_active_start: None,
-        };
-
-        let should_not = should_summarize_session(&state_recent, 2.0).unwrap();
-        assert!(
-            !should_not,
-            "Session idle for <2 hours should not be summarized"
-        );
-    }
-
-    #[test]
-    fn test_should_summarize_session_by_active_time() {
-        let now = chrono::Utc::now();
-
-        // Test 1: Session with low active time but long idle time should summarize
-        let twenty_five_hours_ago = now - chrono::Duration::hours(25);
-        let state_low_active = SessionState {
-            session_id: "test-session-1".to_string(),
-            created_at: now.to_rfc3339(),
-            last_used_at: twenty_five_hours_ago.to_rfc3339(),
-            total_active_time: 1800, // 30 minutes active time
-            last_active_start: None,
-        };
-
-        // Should summarize because idle for 25h > max_idle_hours (24h)
-        let should_summarize_idle =
-            should_summarize_session_by_active_time(&state_low_active, 2.0, 24.0).unwrap();
-        assert!(
-            should_summarize_idle,
-            "Session with low active time but idle for 25h should summarize"
-        );
-
-        // Test 2: Session with high active time should summarize regardless of idle time
-        let one_hour_ago = now - chrono::Duration::hours(1);
-        let state_high_active = SessionState {
-            session_id: "test-session-2".to_string(),
-            created_at: now.to_rfc3339(),
-            last_used_at: one_hour_ago.to_rfc3339(),
-            total_active_time: 9000, // 2.5 hours active time (> 2h max)
-            last_active_start: None,
-        };
-
-        // Should summarize because active time 2.5h > max_active_hours (2h)
-        let should_summarize_active =
-            should_summarize_session_by_active_time(&state_high_active, 2.0, 24.0).unwrap();
-        assert!(
-            should_summarize_active,
-            "Session with active time > max_active_hours should summarize"
-        );
-
-        // Test 3: Session with low active time and short idle time should not summarize
-        let state_healthy = SessionState {
-            session_id: "test-session-3".to_string(),
-            created_at: now.to_rfc3339(),
-            last_used_at: one_hour_ago.to_rfc3339(),
-            total_active_time: 1800, // 30 minutes active time
-            last_active_start: None,
-        };
-
-        // Should not summarize: active time 0.5h < 2h, idle time 1h < 24h
-        let should_not_summarize =
-            should_summarize_session_by_active_time(&state_healthy, 2.0, 24.0).unwrap();
-        assert!(
-            !should_not_summarize,
-            "Healthy session with low active time and short idle time should not summarize"
-        );
-    }
 
     #[test]
     fn test_calculate_session_duration() {
@@ -978,81 +496,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_generate_summary_filename() {
-        let filename = generate_summary_filename();
-        // Should match pattern YYYY-MM-DD_HH-MM-SS.md
-        let re = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.md$").unwrap();
-        assert!(
-            re.is_match(&filename),
-            "Filename should match timestamp pattern: {}",
-            filename
-        );
-    }
 
-    #[tokio::test]
-    async fn test_format_session_summary_markdown() {
-        let summary = SessionSummary {
-            session_id: "sess_123".to_string(),
-            thread_name: "test-thread".to_string(),
-            start_time: "2026-04-04T10:00:00Z".to_string(),
-            end_time: "2026-04-04T12:00:00Z".to_string(),
-            duration_secs: 7200,
-            message_count: 5,
-            key_topics: vec!["处理了5条消息".to_string(), "讨论了会话管理".to_string()],
-            trigger_reason: TriggerReason::Timeout {
-                threshold_hours: 2.0,
-            },
-        };
 
-        let markdown = format_session_summary_markdown(&summary);
 
-        // Check for expected content
-        assert!(markdown.contains("session_id: sess_123"));
-        assert!(markdown.contains("thread_name: test-thread"));
-        assert!(markdown.contains("# 会话总结: test-thread"));
-        assert!(markdown.contains("- 处理了5条消息"));
-        assert!(markdown.contains("- 讨论了会话管理"));
-        assert!(markdown.contains("**持续时间**: 2.00 小时"));
-    }
 
-    #[tokio::test]
-    async fn test_create_basic_session_summary() {
-        let tmp = tempfile::tempdir().unwrap();
-        let thread_path = tmp.path().join("test-thread");
-        tokio::fs::create_dir_all(&thread_path).await.unwrap();
 
-        // Create a mock messages directory
-        let messages_dir = thread_path.join("messages");
-        tokio::fs::create_dir_all(&messages_dir.join("2026-04-04_10-00-00"))
-            .await
-            .unwrap();
-        tokio::fs::create_dir_all(&messages_dir.join("2026-04-04_11-00-00"))
-            .await
-            .unwrap();
-
-        let state = SessionState {
-            session_id: "sess_123".to_string(),
-            created_at: "2026-04-04T10:00:00Z".to_string(),
-            last_used_at: "2026-04-04T12:00:00Z".to_string(),
-            total_active_time: 0,
-            last_active_start: None,
-        };
-
-        let summary = create_basic_session_summary(
-            &thread_path,
-            &state,
-            TriggerReason::Timeout {
-                threshold_hours: 2.0,
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(summary.session_id, "sess_123");
-        assert_eq!(summary.thread_name, "test-thread");
-        assert_eq!(summary.message_count, 2);
-        assert_eq!(summary.duration_secs, 7200);
-        assert!(!summary.key_topics.is_empty());
-    }
 }

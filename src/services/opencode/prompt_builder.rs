@@ -18,7 +18,6 @@ pub fn build_system_prompt(
     thread_path: &Path,
     config_system_prompt: Option<&str>,
     mode: Option<&str>,
-    has_session_summary: bool,
 ) -> String {
     let mut prompt = String::new();
 
@@ -89,19 +88,6 @@ When you have your answer ready, use the jiny_reply_reply_message tool:
 - `attachments`: Optional filenames to attach from the working directory
 After a successful reply, STOP immediately. Do NOT call any other tools or perform further actions.
 CRITICAL: Always use jiny_reply_reply_message tool to send your reply.
-"#,
-        );
-    }
-
-    // Session summary notification
-    if has_session_summary {
-        prompt.push_str(
-            r#"
-## Previous Session Summary
-The previous session was automatically summarized due to timeout (2 hours of inactivity).
-You can find session summaries in `.jyc/session-summaries/` directory.
-The most recent summary contains key topics discussed in the previous session.
-You may refer to it for context if relevant to the current request.
 "#,
         );
     }
@@ -218,7 +204,7 @@ mod tests {
     #[tokio::test]
     async fn test_build_system_prompt() {
         let tmp = tempfile::tempdir().unwrap();
-        let prompt = build_system_prompt(tmp.path(), Some("Be helpful."), Some("build"), false);
+        let prompt = build_system_prompt(tmp.path(), Some("Be helpful."), Some("build"));
 
         assert!(prompt.contains("Be helpful."));
         assert!(prompt.contains("jiny_reply_reply_message"));
@@ -234,7 +220,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("system.md"), "You are a code reviewer.").unwrap();
 
-        let prompt = build_system_prompt(tmp.path(), None, None, false);
+        let prompt = build_system_prompt(tmp.path(), None, None);
         // system.md content should NOT appear in the system prompt
         assert!(!prompt.contains("You are a code reviewer."));
         assert!(prompt.contains("BUILD MODE"));
@@ -243,7 +229,7 @@ mod tests {
     #[test]
     fn test_build_system_prompt_plan_mode() {
         let tmp = tempfile::tempdir().unwrap();
-        let prompt = build_system_prompt(tmp.path(), Some("Be helpful."), Some("plan"), false);
+        let prompt = build_system_prompt(tmp.path(), Some("Be helpful."), Some("plan"));
 
         assert!(prompt.contains("Be helpful."));
         assert!(prompt.contains("PLAN MODE"));

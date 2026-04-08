@@ -290,6 +290,18 @@ pub async fn ensure_thread_opencode_setup(
     Ok(true)
 }
 
+/// Read the current input tokens from session state.
+pub async fn read_input_tokens(thread_path: &Path) -> Option<u64> {
+    let state_path = thread_path.join(".jyc").join("opencode-session.json");
+    let content = tokio::fs::read_to_string(&state_path).await.ok()?;
+    let state: SessionState = serde_json::from_str(&content).ok()?;
+    if state.total_input_tokens > 0 {
+        Some(state.total_input_tokens)
+    } else {
+        None
+    }
+}
+
 /// Read the model override file if it exists.
 pub async fn read_model_override(thread_path: &Path) -> Option<String> {
     let override_path = thread_path.join(".jyc").join("model-override");

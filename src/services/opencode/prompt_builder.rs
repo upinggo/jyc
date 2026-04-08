@@ -150,6 +150,7 @@ pub async fn build_prompt(
 
     // Session reset notification (if applicable)
     if session_was_reset_due_to_tokens {
+        tracing::info!("Session reset note injected into prompt (input token limit exceeded)");
         prompt.push_str("⚠️ **Note:** The session has been reset because the input token limit (108K) was exceeded. This ensures response quality by clearing the conversation history.\n\n");
     }
 

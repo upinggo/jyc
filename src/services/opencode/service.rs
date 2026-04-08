@@ -254,7 +254,10 @@ impl OpenCodeService {
         // - ContextOverflow (handle_sse_result)
         // - Stale session detection (handle_sse_result)
         // - Session token limit (input token based reset)
-        let max_input_tokens = None; // Will be populated from config in phase 4
+        let max_input_tokens = self.agent_config
+            .opencode
+            .as_ref()
+            .map(|oc| oc.max_input_tokens);
         let session_id = session::get_or_create_session(
             &client, 
             thread_path,

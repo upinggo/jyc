@@ -25,6 +25,27 @@ pub fn strip_reply_prefix(subject: &str) -> String {
     REPLY_PREFIX_RE.replace(subject, "").trim().to_string()
 }
 
+/// Strip trailing `---` separators from reply text to prevent duplicate footers.
+///
+/// This function removes any trailing `---` separators (with optional whitespace)
+/// from the end of the reply text. This prevents duplicate separators when the
+/// system adds its own footer starting with `---\n\n`.
+pub fn strip_trailing_separators(text: &str) -> String {
+    let trimmed = text.trim_end();
+    
+    // Check if text ends with `---` (with optional preceding whitespace)
+    if trimmed.ends_with("---") {
+        // Find the start of the last `---` sequence
+        let without_separators = trimmed
+            .trim_end_matches(|c: char| c.is_whitespace() || c == '-')
+            .trim_end();
+        
+        without_separators.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Derive a thread name from an email subject.
 ///
 /// 1. Strip reply/forward prefixes (Re:, Fwd:, 回复:, etc.)
@@ -898,15 +919,18 @@ pub async fn build_full_reply_text(
     .await;
 
     let footer = build_footer(model, mode, input_tokens, max_tokens);
+    
+    // Clean reply text to remove any trailing `---` separators
+    let clean_reply = strip_trailing_separators(reply_text);
 
     if quoted_history.is_empty() && footer.is_empty() {
-        reply_text.to_string()
+        clean_reply
     } else if quoted_history.is_empty() {
-        format!("{}\n\n{}", reply_text, footer)
+        format!("{}\n\n{}", clean_reply, footer)
     } else if footer.is_empty() {
-        format!("{}\n\n{}", reply_text, quoted_history)
+        format!("{}\n\n{}", clean_reply, quoted_history)
     } else {
-        format!("{}\n\n{}\n\n{}", reply_text, footer, quoted_history)
+        format!("{}\n\n{}\n\n{}", clean_reply, footer, quoted_history)
     }
 }
 
@@ -1231,5 +1255,61 @@ test"#;
         let entry_text = r#"<!-- test -->
 test"#;
         assert!(parse_chat_log_entry(entry_text).is_none());
+    }
+
+    // --- strip_trailing_separators tests ---
+
+    #[test]
+    fn test_strip_trailing_separators_none() {
+        let text = "This is a reply.";
+        assert_eq!(strip_trailing_separators(text), "This is a reply.");
+    }
+
+    #[test]
+    fn test_strip_trailing_separators_single() {
+        let text = "This is a reply.\n\n---";
+        assert_eq!(strip_trailing_separators(text), "This is a reply.");
+    }
+
+    #[test]
+    fn test_strip_trailing_separators_with_whitespace() {
+        let text = "This is a reply.\n\n---\n";
+        assert_eq!(strip_trailing_separators(text), "This is a reply.");
+        
+        let text2 = "This is a reply.  ---  ";
+        assert_eq!(strip_trailing_separators(text2), "This is a reply.");
+    }
+
+    #[test]
+    fn test_strip_trailing_separators_multiple() {
+        let text = "This is a reply.\n\n---\n\n---";
+        assert_eq!(strip_trailing_separators(text), "This is a reply.");
+    }
+
+    #[test]
+    fn test_strip_trailing_separators_only_separators() {
+        let text = "---";
+        assert_eq!(strip_trailing_separators(text), "");
+        
+        let text2 = "---\n\n---";
+        assert_eq!(strip_trailing_separators(text2), "");
+    }
+
+    #[test]
+    fn test_strip_trailing_separators_within_body() {
+        let text = "This is a --- reply --- with separators inside.";
+        assert_eq!(
+            strip_trailing_separators(text),
+            "This is a --- reply --- with separators inside."
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_separators_empty() {
+        let text = "";
+        assert_eq!(strip_trailing_separators(text), "");
+        
+        let text2 = "   ";
+        assert_eq!(strip_trailing_separators(text2), "");
     }
 }

@@ -83,11 +83,14 @@ impl crate::channels::types::OutboundAdapter for FeishuOutboundAdapter {
         // 2. Build footer with model/mode/tokens information
         let footer = email_parser::build_footer(model, mode, input_tokens, max_tokens);
         
-        // 3. Combine reply text with footer
+        // 3. Clean reply text to remove any trailing `---` separators
+        let clean_reply = email_parser::strip_trailing_separators(reply_text);
+        
+        // 4. Combine cleaned reply text with footer
         let full_reply = if footer.is_empty() {
-            reply_text.to_string()
+            clean_reply
         } else {
-            format!("{}\n\n{}", reply_text, footer)
+            format!("{}\n\n{}", clean_reply, footer)
         };
         
         // 4. Send text reply

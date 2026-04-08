@@ -398,6 +398,7 @@ impl OpenCodeClient {
                                     &sse_event,
                                     session_id,
                                     &thread_name,
+                                    directory,
                                     mode_label,
                                     &mut parts,
                                     &mut result,
@@ -598,6 +599,7 @@ impl OpenCodeClient {
         event: &SseEvent,
         session_id: &str,
         thread_name: &str,
+        directory: &Path,
         mode_label: &str,
         parts: &mut HashMap<String, ResponsePart>,
         result: &mut SseResult,
@@ -808,6 +810,13 @@ impl OpenCodeClient {
                                     result.cache_read_tokens = Some(token_info.cache.read);
                                     result.cache_write_tokens = Some(token_info.cache.write);
                                     result.total_cost = part.cost;
+
+                                    // Persist input tokens immediately per step — don't wait
+                                    // for the prompt to complete. This ensures tokens are saved
+                                    // even if the SSE stream exits early (reply tool, timeout).
+                                    crate::services::opencode::session::add_input_tokens(
+                                        directory, token_info.input
+                                    ).await.ok();
                                     
                                     tracing::info!(
                                         reason = ?part.reason,

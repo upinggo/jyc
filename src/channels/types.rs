@@ -71,6 +71,7 @@ pub struct MessageAttachment {
     /// Binary content — transient, only present during processing.
     /// Freed after saving to disk.
     #[serde(skip)]
+    #[allow(dead_code)]
     pub content: Option<Vec<u8>>,
     /// Path where the attachment was saved (set after saving to disk)
     pub saved_path: Option<PathBuf>,
@@ -82,8 +83,10 @@ pub struct PatternMatch {
     /// Name of the matched pattern
     pub pattern_name: String,
     /// Channel type of the matched pattern
+    #[allow(dead_code)]
     pub channel: ChannelType,
     /// Channel-specific match details
+    #[allow(dead_code)]
     pub matches: HashMap<String, String>,
 }
 
@@ -106,6 +109,7 @@ pub struct InboundAdapterOptions {
     /// Callback for each received message (fire-and-forget)
     pub on_message: Box<dyn Fn(InboundMessage) -> Result<()> + Send + Sync>,
     /// Callback for errors
+    #[allow(dead_code)]
     pub on_error: Box<dyn Fn(anyhow::Error) + Send + Sync>,
 }
 
@@ -117,6 +121,7 @@ pub struct InboundAdapterOptions {
 /// for pattern matching and thread name derivation.
 pub trait ChannelMatcher: Send + Sync {
     /// The channel type this matcher handles (e.g., "email", "feishu")
+    #[allow(dead_code)]
     fn channel_type(&self) -> &str;
 
     /// Derive a thread name from the message and patterns.
@@ -177,12 +182,14 @@ pub trait InboundAdapter: ChannelMatcher {
 #[async_trait]
 pub trait OutboundAdapter: Send + Sync {
     /// The channel type this adapter handles
+    #[allow(dead_code)]
     fn channel_type(&self) -> &str;
 
     /// Establish connection to the outbound service
     async fn connect(&self) -> Result<()>;
 
     /// Disconnect from the outbound service
+    #[allow(dead_code)]
     async fn disconnect(&self) -> Result<()>;
 
     /// Strip channel-specific artifacts from a message body.

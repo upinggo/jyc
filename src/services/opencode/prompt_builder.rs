@@ -47,7 +47,13 @@ After you have replied to the current message, STOP. Do not do anything else.
     // Mode-specific reply instructions
     if mode == Some("plan") {
         prompt.push_str(
-            r#"## PLAN MODE: Read-Only
+            r#"<system-reminder>
+You are in PLAN MODE (read-only).
+You are NOT permitted to make file changes, run shell commands, or use write tools.
+You may only read files and analyze code.
+</system-reminder>
+
+## PLAN MODE: Read-Only
 You are in PLAN mode. Provide a detailed plan only — do NOT execute commands, edit files, or use tools.
 Your reply should contain:
 1. A brief summary of the request
@@ -138,13 +144,23 @@ The chat history provides context about ongoing discussions, past decisions, and
 ///
 /// Includes:
 /// - Incoming message body (stripped, truncated)
+/// - Optional session reset notification if session was reset due to token limit
 /// Note: Reply context is saved to disk (.jyc/reply-context.json), NOT embedded in prompt.
 pub async fn build_prompt(
     message: &InboundMessage,
     _thread_path: &Path,
     _message_dir: &str,
+    session_was_reset_due_to_tokens: bool,
 ) -> Result<String> {
     let mut prompt = String::new();
+
+    // Session reset notification (if applicable)
+    if session_was_reset_due_to_tokens {
+        tracing::info!("Session reset note injected into prompt (input token limit exceeded)");
+        prompt.push_str("⚠️ **Note:** This is a NEW session. The previous session was reset because the input token limit was exceeded.\n");
+        prompt.push_str("You have lost all previous conversation context. To understand what was discussed and worked on before, read the chat history log file `chat_history_<date>.md` in the thread directory. It is a chronological record of all messages and replies.\n");
+        prompt.push_str("Continue your work based on the latest entries in that file.\n\n");
+    }
 
     // Incoming message
     prompt.push_str("## Incoming Message\n");
@@ -242,7 +258,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let msg = test_message();
 
-        let prompt = build_prompt(&msg, tmp.path(), "2026-03-27_10-00-00")
+        let prompt = build_prompt(&msg, tmp.path(), "2026-03-27_10-00-00", false)
             .await
             .unwrap();
 
@@ -252,5 +268,26 @@ mod tests {
         assert!(prompt.contains("Hello, help me."));
         // No REPLY_TOKEN in prompt — context is on disk
         assert!(!prompt.contains("REPLY_TOKEN="));
+        // No session reset notification
+        assert!(!prompt.contains("session has been reset"));
+    }
+
+    #[tokio::test]
+    async fn test_build_prompt_with_session_reset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let msg = test_message();
+
+        let prompt = build_prompt(&msg, tmp.path(), "2026-03-27_10-00-00", true)
+            .await
+            .unwrap();
+
+        assert!(prompt.contains("## Incoming Message"));
+        assert!(prompt.contains("John"));
+        assert!(prompt.contains("john@example.com"));
+        assert!(prompt.contains("Hello, help me."));
+        // Should contain session reset notification
+        assert!(prompt.contains("NEW session"));
+        assert!(prompt.contains("input token limit"));
+        assert!(prompt.contains("chat_history_"));
     }
 }

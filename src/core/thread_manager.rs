@@ -70,6 +70,7 @@ pub struct ThreadManager {
     worker_handles: Mutex<Vec<JoinHandle<()>>>,
 }
 
+#[allow(dead_code)]
 impl ThreadManager {
     /// Create a new ThreadManager with event support enabled by default.
     pub fn new(

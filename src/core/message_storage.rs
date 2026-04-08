@@ -132,6 +132,7 @@ impl MessageStorage {
     }
 
     /// Format a received message with YAML frontmatter (legacy format).
+    #[allow(dead_code)]
     fn format_received_md(
         &self,
         message: &InboundMessage,
@@ -206,6 +207,7 @@ impl MessageStorage {
 
 /// A saved (or skipped) attachment record.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct SavedAttachment {
     filename: String,
     content_type: String,
@@ -216,6 +218,7 @@ struct SavedAttachment {
 }
 
 /// Sanitize an attachment filename: basename only, no traversal.
+#[allow(dead_code)]
 fn sanitize_attachment_filename(filename: &str) -> String {
     let basename = Path::new(filename)
         .file_name()
@@ -244,6 +247,7 @@ fn sanitize_attachment_filename(filename: &str) -> String {
 }
 
 /// Resolve filename collisions by appending a counter suffix.
+#[allow(dead_code)]
 async fn resolve_collision(dir: &Path, filename: &str) -> PathBuf {
     let target = dir.join(filename);
     if !target.exists() {

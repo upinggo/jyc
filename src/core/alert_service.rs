@@ -39,6 +39,7 @@ struct ThreadStats {
 
 /// Event types that can be reported to the alert service.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum AlertEvent {
     Error { message: String, thread: Option<String>, context: Option<String> },
     MessageReceived { thread: String },
@@ -58,9 +59,11 @@ pub enum AlertEvent {
 /// Clone this and pass to components that need to log + report.
 #[derive(Clone)]
 pub struct AppLogger {
+    #[allow(dead_code)]
     sender: mpsc::Sender<AlertEvent>,
 }
 
+#[allow(dead_code)]
 impl AppLogger {
     // --- Logging methods (delegate to tracing + send to alert service) ---
 

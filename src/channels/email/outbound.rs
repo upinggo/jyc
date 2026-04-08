@@ -132,6 +132,9 @@ impl OutboundAdapter for EmailOutboundAdapter {
         let model = reply_ctx.as_ref().and_then(|c| c.model.as_deref());
         let mode = reply_ctx.as_ref().and_then(|c| c.mode.as_deref());
 
+        // Read current input tokens from session state
+        let (input_tokens, max_tokens) = crate::services::opencode::session::read_input_tokens(thread_path).await;
+
         // 2. Build full reply with email-specific quoted history + model/mode footer
         let body_text = original
             .content
@@ -150,6 +153,8 @@ impl OutboundAdapter for EmailOutboundAdapter {
             message_dir,
             model,
             mode,
+            input_tokens,
+            max_tokens,
         )
         .await;
 

@@ -5,6 +5,9 @@ use std::path::Path;
 use super::client::OpenCodeClient;
 use crate::config::types::AgentConfig;
 
+/// Default maximum input tokens per session before resetting
+pub const DEFAULT_MAX_INPUT_TOKENS: u64 = 120 * 1024; // 120K tokens
+
 /// Per-thread session state, persisted in `.jyc/opencode-session.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionState {
@@ -14,16 +17,12 @@ pub struct SessionState {
     pub created_at: String,
     #[serde(rename = "lastUsedAt")]
     pub last_used_at: String,
-    /// Total active time in seconds (accumulated over session lifetime)
-    #[serde(rename = "totalActiveTime", default)]
-    pub total_active_time: u64,
-    /// Timestamp when current active period started (if session is currently active)
-    #[serde(
-        rename = "lastActiveStart",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub last_active_start: Option<String>,
+    /// Current input tokens (from latest step-finish SSE event)
+    #[serde(rename = "totalInputTokens", default)]
+    pub total_input_tokens: u64,
+    /// Resolved max input tokens for this session
+    #[serde(rename = "maxInputTokens", default)]
+    pub max_input_tokens: u64,
 }
 
 
@@ -33,35 +32,37 @@ pub struct SessionState {
 /// Get or create a session for a thread.
 ///
 /// 1. Read `.jyc/opencode-session.json`
-/// 2. Check if session has exceeded maximum active time (default: 1 hour)
+/// 2. Check if session has exceeded maximum input tokens (default: 108K)
 /// 3. If exceeded → delete old session and create new one
 /// 4. Verify session still exists via API
 /// 5. If missing → create new session
+///
+/// Returns: (session_id, session_was_reset_due_to_token_limit)
 pub async fn get_or_create_session(
     client: &OpenCodeClient,
     thread_path: &Path,
-) -> Result<String> {
+    max_input_tokens: Option<u64>,
+) -> Result<(String, bool)> {
     let state_path = thread_path.join(".jyc").join("opencode-session.json");
 
     // Try loading existing session
     if state_path.exists() {
         if let Ok(content) = tokio::fs::read_to_string(&state_path).await {
             if let Ok(state) = serde_json::from_str::<SessionState>(&content) {
-                // Check if session has exceeded maximum active time (1 hour default)
-                const MAX_ACTIVE_HOURS: f64 = 1.0;
-                let max_active_secs = (MAX_ACTIVE_HOURS * 3600.0) as u64;
-                
-                if state.total_active_time >= max_active_secs {
+                // Check if session has exceeded maximum input tokens
+                let max_tokens = max_input_tokens.unwrap_or(DEFAULT_MAX_INPUT_TOKENS);
+                if state.total_input_tokens >= max_tokens {
                     tracing::info!(
                         session_id = %state.session_id,
-                        total_active_time = state.total_active_time,
-                        max_active_secs = max_active_secs,
-                        "Session exceeded maximum active time, resetting"
+                        total_input_tokens = state.total_input_tokens,
+                        max_input_tokens = max_tokens,
+                        "Session exceeded maximum input tokens, resetting"
                     );
 
                     // Delete old session and create new one
                     delete_session(thread_path).await?;
-                    return create_new_session(client, thread_path).await;
+                    let new_session_id = create_new_session(client, thread_path).await?;
+                    return Ok((new_session_id, true));
                 }
 
                 // Verify session still exists
@@ -71,7 +72,11 @@ pub async fn get_or_create_session(
                             session_id = %state.session_id,
                             "Reusing existing session"
                         );
-                        return Ok(state.session_id);
+                        // Update last_used_at when session is reused
+                        let mut updated_state = state.clone();
+                        updated_state.last_used_at = chrono::Utc::now().to_rfc3339();
+                        let _ = save_session_state(thread_path, &updated_state).await;
+                        return Ok((state.session_id, false));
                     }
                     Ok(None) => {
                         tracing::info!(
@@ -91,7 +96,8 @@ pub async fn get_or_create_session(
     }
 
     // Create new session
-    create_new_session(client, thread_path).await
+    let session_id = create_new_session(client, thread_path).await?;
+    Ok((session_id, false))
 }
 
 /// Create a fresh session for a thread.
@@ -111,8 +117,8 @@ pub async fn create_new_session(client: &OpenCodeClient, thread_path: &Path) -> 
         session_id: session.id.clone(),
         created_at: chrono::Utc::now().to_rfc3339(),
         last_used_at: chrono::Utc::now().to_rfc3339(),
-        total_active_time: 0,
-        last_active_start: None,
+        total_input_tokens: 0,
+        max_input_tokens: 0,
     };
 
     save_session_state(thread_path, &state).await?;
@@ -131,60 +137,61 @@ pub async fn delete_session(thread_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Update the lastUsedAt timestamp and track active time.
-pub async fn update_session_timestamp(thread_path: &Path) -> Result<()> {
+
+
+/// Update input tokens in session state (write raw value from SSE, not accumulated).
+pub async fn add_input_tokens(thread_path: &Path, input_tokens: u64) -> Result<()> {
     let state_path = thread_path.join(".jyc").join("opencode-session.json");
-    if let Ok(content) = tokio::fs::read_to_string(&state_path).await {
-        if let Ok(mut state) = serde_json::from_str::<SessionState>(&content) {
-            let now = chrono::Utc::now();
-            state.last_used_at = now.to_rfc3339();
-            save_session_state(thread_path, &state).await?;
-        }
+    tracing::debug!("add_input_tokens: path={}, tokens={}", state_path.display(), input_tokens);
+    
+    if !state_path.exists() {
+        tracing::warn!("Session state file does not exist: {}", state_path.display());
+        return Ok(());
     }
-    Ok(())
-}
-
-/// Start tracking active time for a session.
-pub async fn start_active_time_tracking(thread_path: &Path) -> Result<()> {
-    let state_path = thread_path.join(".jyc").join("opencode-session.json");
-    if let Ok(content) = tokio::fs::read_to_string(&state_path).await {
-        if let Ok(mut state) = serde_json::from_str::<SessionState>(&content) {
-            let now = chrono::Utc::now();
-            state.last_active_start = Some(now.to_rfc3339());
-            save_session_state(thread_path, &state).await?;
-        }
-    }
-    Ok(())
-}
-
-/// Stop tracking active time and accumulate it to total active time.
-pub async fn stop_active_time_tracking(thread_path: &Path) -> Result<()> {
-    let state_path = thread_path.join(".jyc").join("opencode-session.json");
-    if let Ok(content) = tokio::fs::read_to_string(&state_path).await {
-        if let Ok(mut state) = serde_json::from_str::<SessionState>(&content) {
-            if let Some(start_time_str) = &state.last_active_start {
-                if let Ok(start_time) = chrono::DateTime::parse_from_rfc3339(start_time_str) {
-                    let now = chrono::Utc::now();
-                    let active_duration = now.signed_duration_since(start_time);
-                    let active_seconds = active_duration.num_seconds().max(0) as u64;
-
-                    state.total_active_time += active_seconds;
-                    state.last_active_start = None;
-
-                    tracing::debug!(
+    
+    match tokio::fs::read_to_string(&state_path).await {
+        Ok(content) => {
+            tracing::debug!("Read session file, length: {}", content.len());
+            match serde_json::from_str::<SessionState>(&content) {
+                Ok(mut state) => {
+                    let old_tokens = state.total_input_tokens;
+                    state.total_input_tokens = input_tokens;
+                    state.last_used_at = chrono::Utc::now().to_rfc3339();
+                    
+                    tracing::info!(
                         session_id = %state.session_id,
-                        active_seconds = active_seconds,
-                        total_active_time = state.total_active_time,
-                        "Accumulated active time"
+                        input_tokens = input_tokens,
+                        previous_input_tokens = old_tokens,
+                        "Updated input tokens in session"
                     );
-
-                    save_session_state(thread_path, &state).await?;
+                    
+                    match save_session_state(thread_path, &state).await {
+                        Ok(_) => {
+                            tracing::debug!("Successfully saved updated session state");
+                            Ok(())
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to save session state");
+                            Err(e)
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to parse session state JSON");
+                    // Try to create a new session state
+                    tracing::warn!("Creating new session state due to parse error");
+                    Err(e.into())
                 }
             }
         }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to read session state file");
+            Err(e.into())
+        }
     }
-    Ok(())
 }
+
+
 
 /// Save session state to `.jyc/opencode-session.json`.
 async fn save_session_state(thread_path: &Path, state: &SessionState) -> Result<()> {
@@ -287,6 +294,34 @@ pub async fn ensure_thread_opencode_setup(
     Ok(true)
 }
 
+/// Read the current and max input tokens from session state.
+pub async fn read_input_tokens(thread_path: &Path) -> (Option<u64>, Option<u64>) {
+    let state_path = thread_path.join(".jyc").join("opencode-session.json");
+    let content = match tokio::fs::read_to_string(&state_path).await.ok() {
+        Some(c) => c,
+        None => return (None, None),
+    };
+    let state: SessionState = match serde_json::from_str(&content).ok() {
+        Some(s) => s,
+        None => return (None, None),
+    };
+    let current = if state.total_input_tokens > 0 { Some(state.total_input_tokens) } else { None };
+    let max = if state.max_input_tokens > 0 { Some(state.max_input_tokens) } else { None };
+    (current, max)
+}
+
+/// Save the resolved max_input_tokens to the session state.
+pub async fn save_max_input_tokens(thread_path: &Path, max_tokens: u64) -> Result<()> {
+    let state_path = thread_path.join(".jyc").join("opencode-session.json");
+    if !state_path.exists() {
+        return Ok(());
+    }
+    let content = tokio::fs::read_to_string(&state_path).await?;
+    let mut state: SessionState = serde_json::from_str(&content)?;
+    state.max_input_tokens = max_tokens;
+    save_session_state(thread_path, &state).await
+}
+
 /// Read the model override file if it exists.
 pub async fn read_model_override(thread_path: &Path) -> Option<String> {
     let override_path = thread_path.join(".jyc").join("model-override");
@@ -333,6 +368,7 @@ fn get_reply_tool_command() -> Vec<String> {
 
 
 /// Calculate session duration in seconds.
+#[allow(dead_code)]
 pub fn calculate_session_duration(state: &SessionState) -> Result<u64> {
     let created = chrono::DateTime::parse_from_rfc3339(&state.created_at)
         .context("failed to parse created_at timestamp")?;
@@ -359,6 +395,7 @@ pub fn calculate_session_duration(state: &SessionState) -> Result<u64> {
 ///
 /// Counts `type:received` entries in `chat_history_*.md` files.
 /// Falls back to counting `messages/` subdirectories for legacy threads.
+#[allow(dead_code)]
 pub async fn count_messages(thread_path: &Path) -> Result<usize> {
     // Primary: count entries in chat log files
     let pattern = thread_path.join("chat_history_*.md");
@@ -433,8 +470,8 @@ mod tests {
             session_id: "sess_123".to_string(),
             created_at: "2026-03-27T10:00:00Z".to_string(),
             last_used_at: "2026-03-27T10:00:00Z".to_string(),
-            total_active_time: 0,
-            last_active_start: None,
+            total_input_tokens: 0,
+            max_input_tokens: 0,
         };
 
         save_session_state(&thread_path, &state).await.unwrap();
@@ -485,8 +522,8 @@ mod tests {
             session_id: "test-session".to_string(),
             created_at: start.to_rfc3339(),
             last_used_at: end.to_rfc3339(),
-            total_active_time: 0,
-            last_active_start: None,
+            total_input_tokens: 0,
+            max_input_tokens: 0,
         };
 
         let duration = calculate_session_duration(&state).unwrap();

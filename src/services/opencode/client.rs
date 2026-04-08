@@ -36,6 +36,7 @@ impl OpenCodeClient {
     }
     
     /// Create a new client with an event bus for publishing thread events.
+    #[allow(dead_code)]
     pub fn with_event_bus(base_url: &str, event_bus: Option<ThreadEventBusRef>) -> Self {
         Self {
             http: reqwest::Client::new(),
@@ -45,6 +46,7 @@ impl OpenCodeClient {
     }
 
     /// Create a client reusing an existing reqwest::Client (shares connection pool).
+    #[allow(dead_code)]
     pub fn with_http_client(base_url: &str, http: reqwest::Client) -> Self {
         Self {
             http,
@@ -67,6 +69,7 @@ impl OpenCodeClient {
     }
     
     /// Helper method to publish an event if event bus is available.
+    #[allow(dead_code)]
     async fn publish_event(&self, event: ThreadEvent) {
         if let Some(event_bus) = &self.event_bus {
             match event_bus.publish(event).await {
@@ -208,6 +211,44 @@ impl OpenCodeClient {
 
         let providers: ProvidersResponse = resp.json().await.context("parse providers response")?;
         Ok(providers)
+    }
+
+    /// Look up the context window limit for a specific model.
+    ///
+    /// Returns the context token limit if found, or None.
+    /// The model string should be in "provider/model-id" format.
+    pub async fn get_model_context_limit(&self, directory: &Path, model: &str) -> Option<u64> {
+        let (provider_id, model_id) = model.split_once('/')?;
+        let providers = self.get_providers(directory).await.ok()?;
+
+        for provider in &providers.all {
+            if provider.id == provider_id {
+                tracing::debug!(
+                    provider = %provider_id,
+                    available_models = ?provider.models.keys().collect::<Vec<_>>(),
+                    looking_for = %model_id,
+                    "Searching for model in provider"
+                );
+                if let Some(model_info) = provider.models.get(model_id) {
+                    tracing::debug!(
+                        model = %model,
+                        limit = ?model_info.limit,
+                        "Model found in provider"
+                    );
+                    if let Some(ref limit) = model_info.limit {
+                        if limit.context > 0 {
+                            tracing::info!(
+                                model = %model,
+                                context_limit = limit.context,
+                                "Model context limit discovered"
+                            );
+                            return Some(limit.context);
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     // --- Prompt API ---
@@ -398,6 +439,7 @@ impl OpenCodeClient {
                                     &sse_event,
                                     session_id,
                                     &thread_name,
+                                    directory,
                                     mode_label,
                                     &mut parts,
                                     &mut result,
@@ -598,7 +640,8 @@ impl OpenCodeClient {
         event: &SseEvent,
         session_id: &str,
         thread_name: &str,
-        mode_label: &str,
+        directory: &Path,
+        _mode_label: &str,
         parts: &mut HashMap<String, ResponsePart>,
         result: &mut SseResult,
         last_activity: &mut Instant,
@@ -637,10 +680,6 @@ impl OpenCodeClient {
                                         model.clone()
                                     };
                                     tracing::info!(model = %combined_model, mode = ?info.mode, "AI model selected");
-                                    // Record model on the parent ai span so all subsequent
-                                    // log lines show the actual model name
-                                    let span_label = format!("{}:{}", combined_model, mode_label);
-                                    tracing::Span::current().record("m", &span_label);
                                 }
                             }
                             // Only update if new value is Some (don't overwrite with None)
@@ -808,6 +847,13 @@ impl OpenCodeClient {
                                     result.cache_read_tokens = Some(token_info.cache.read);
                                     result.cache_write_tokens = Some(token_info.cache.write);
                                     result.total_cost = part.cost;
+
+                                    // Persist input tokens immediately per step — don't wait
+                                    // for the prompt to complete. This ensures tokens are saved
+                                    // even if the SSE stream exits early (reply tool, timeout).
+                                    crate::services::opencode::session::add_input_tokens(
+                                        directory, token_info.input
+                                    ).await.ok();
                                     
                                     tracing::info!(
                                         reason = ?part.reason,

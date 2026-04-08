@@ -143,8 +143,17 @@ mode = "opencode"
 # text = "Thank you for your message."
 
 [agent.opencode]
+# Model identifier (e.g., "SiliconFlow/Pro/zai-org/GLM-4.7")
+# model = "ark/deepseek-v3.2"
+
+# Small model for lightweight tasks (title generation, compaction)
+# small_model = "ark/deepseek-v3.2"
+
 system_prompt = "You are an AI assistant. Respond professionally and concisely."
 include_thread_history = false
+
+# Maximum input tokens per session before resetting (default: 108000)
+max_input_tokens = 108000
 
 
 [agent.attachments]

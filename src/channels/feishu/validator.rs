@@ -5,6 +5,7 @@ use anyhow::Result;
 use super::config::FeishuConfig;
 
 /// Validate Feishu configuration.
+#[allow(dead_code)]
 pub fn validate_config(config: &FeishuConfig) -> Result<()> {
     // Validate app_id
     if config.app_id.is_empty() {

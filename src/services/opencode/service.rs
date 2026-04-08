@@ -10,6 +10,7 @@ use tracing::Instrument;
 use super::client::{OpenCodeClient, SseResult};
 use super::types::*;
 use super::{session, prompt_builder, OpenCodeServer};
+use super::session::DEFAULT_MAX_INPUT_TOKENS;
 use crate::channels::types::InboundMessage;
 use crate::config::types::AgentConfig;
 use crate::core::thread_event::ThreadEvent;
@@ -54,6 +55,7 @@ impl OpenCodeService {
     }
     
     /// Create a new OpenCodeService with optional event bus.
+    #[allow(dead_code)]
     pub fn new_with_event_bus(
         server: Arc<OpenCodeServer>,
         agent_config: Arc<AgentConfig>,
@@ -71,6 +73,7 @@ impl OpenCodeService {
     }
     
     /// Helper method to publish an event if event bus is available.
+    #[allow(dead_code)]
     async fn publish_event(&self, event: ThreadEvent) {
         let event_bus_lock = self.event_bus.lock().await;
         if let Some(event_bus) = &*event_bus_lock {
@@ -105,6 +108,7 @@ impl OpenCodeService {
     /// 
     /// Heartbeat events are sent at regular intervals during long-running
     /// processing to indicate the agent is still working.
+    #[allow(dead_code)]
     async fn publish_heartbeat(
         &self,
         thread_name: &str,
@@ -125,6 +129,7 @@ impl OpenCodeService {
     /// 
     /// Returns true if enough time has passed since the last heartbeat
     /// and minimum elapsed time has been reached.
+    #[allow(dead_code)]
     fn should_send_heartbeat(
         last_heartbeat_time: Option<Instant>,
         elapsed_since_start: Duration,
@@ -145,6 +150,7 @@ impl OpenCodeService {
     }
     
     /// Helper method to publish ProcessingProgress event.
+    #[allow(dead_code)]
     async fn publish_processing_progress(
         &self,
         thread_name: &str,
@@ -167,11 +173,13 @@ impl OpenCodeService {
     
     /// Set the event bus for this agent.
     /// This allows the event bus to be set after the agent is created.
+    #[allow(dead_code)]
     pub async fn set_event_bus(&self, event_bus: Option<ThreadEventBusRef>) {
         let mut event_bus_lock = self.event_bus.lock().await;
         *event_bus_lock = event_bus;
     }
 
+    #[allow(dead_code)]
     async fn set_thread_event_bus(&self, thread_name: &str, event_bus: Option<ThreadEventBusRef>) {
         tracing::debug!(
             thread_name = %thread_name,
@@ -249,21 +257,8 @@ impl OpenCodeService {
             tracing::info!("opencode.json updated");
         }
 
-        // 3. Get or create session (reuse across messages, mode switches, model switches)
-        // Sessions are only deleted for error recovery:
-        // - ContextOverflow (handle_sse_result)
-        // - Stale session detection (handle_sse_result)
-        // - Session timeout (active time based reset)
-        let session_id = session::get_or_create_session(
-            &client, 
-            thread_path,
-        ).await?;
-
-        // 4. Clean up stale signal file
-        session::cleanup_signal_file(thread_path).await;
-
-        // 5. Read model (from override or config) and mode (from override)
-        let model = session::read_model_override(thread_path)
+        // 3. Read model early (needed for context limit lookup before session creation)
+        let model: Option<String> = session::read_model_override(thread_path)
             .await
             .or_else(|| {
                 self.agent_config
@@ -272,6 +267,63 @@ impl OpenCodeService {
                     .and_then(|o| o.model.clone())
             });
 
+        // 4. Get or create session (reuse across messages, mode switches, model switches)
+        // Sessions are only deleted for error recovery:
+        // - ContextOverflow (handle_sse_result)
+        // - Stale session detection (handle_sse_result)
+        // - Session token limit (input token based reset)
+        //
+        // max_input_tokens priority:
+        // 1. Config override (agent.opencode.max_input_tokens)
+        // 2. 95% of the model's context window (from OpenCode /provider API)
+        // 3. Default (120K)
+        let config_max_tokens: Option<u64> = self.agent_config
+            .opencode
+            .as_ref()
+            .and_then(|oc| oc.max_input_tokens);
+
+        let max_input_tokens = if config_max_tokens.is_some() {
+            tracing::debug!(
+                max_input_tokens = ?config_max_tokens,
+                "Using config-defined max input tokens"
+            );
+            config_max_tokens
+        } else if let Some(ref m) = model {
+            if let Some(context_limit) = client.get_model_context_limit(thread_path, m).await {
+                let limit_95 = (context_limit as f64 * 0.95) as u64;
+                tracing::info!(
+                    model = %m,
+                    context_limit = context_limit,
+                    max_input_tokens = limit_95,
+                    "Using 95% of model context window as input token limit"
+                );
+                Some(limit_95)
+            } else {
+                tracing::debug!(
+                    model = %m,
+                    "Could not get model context limit, falling back to default"
+                );
+                None
+            }
+        } else {
+            tracing::debug!("No model specified, using default max input tokens");
+            None
+        };
+
+        let (session_id, session_reset_due_to_tokens) = session::get_or_create_session(
+            &client, 
+            thread_path,
+            max_input_tokens,
+        ).await?;
+
+        // Save resolved max_input_tokens to session state for footer display
+        let resolved_max = max_input_tokens.unwrap_or(DEFAULT_MAX_INPUT_TOKENS);
+        session::save_max_input_tokens(thread_path, resolved_max).await.ok();
+
+        // 5. Clean up stale signal file
+        session::cleanup_signal_file(thread_path).await;
+
+        // 6. Read mode (from override)
         let mode_override = session::read_mode_override(thread_path).await;
         let agent_mode = if mode_override.as_deref() == Some("plan") {
             Some("plan".to_string())
@@ -322,6 +374,7 @@ impl OpenCodeService {
             message,
             thread_path,
             message_dir,
+            session_reset_due_to_tokens,
         ).await?;
 
         // Model and mode are passed per-prompt — no session restart needed for switches
@@ -347,8 +400,7 @@ impl OpenCodeService {
             "Sending prompt to OpenCode"
         );
 
-        // Start tracking active time for this session
-        session::start_active_time_tracking(thread_path).await.ok();
+
 
         let sse_result = client
             .prompt_with_sse(&session_id, thread_path, &request, &mode_label, pending_rx)
@@ -365,8 +417,7 @@ impl OpenCodeService {
             }
             Err(e) => {
                 tracing::error!(error = %e, "SSE streaming failed, trying blocking fallback");
-                // Ensure active time tracking is started for blocking fallback
-                session::start_active_time_tracking(thread_path).await.ok();
+
                 let blocking_result = client
                     .prompt_blocking(&session_id, thread_path, &request)
                     .await?;
@@ -377,9 +428,7 @@ impl OpenCodeService {
             }
         };
 
-        // Update session timestamp and stop active time tracking
-        session::update_session_timestamp(thread_path).await.ok();
-        session::stop_active_time_tracking(thread_path).await.ok();
+
 
         // Handle the result
         // Note: OpenCodeClient will publish ProcessingCompleted event for successful cases
@@ -463,6 +512,9 @@ impl OpenCodeService {
             let new_id = session::create_new_session(client, thread_path).await?;
             session::cleanup_signal_file(thread_path).await;
             let retry = client.prompt_with_sse(&new_id, thread_path, request, mode_label, pending_rx).await?;
+            
+            // Input tokens already persisted per step in client.rs
+            
             let sent = retry.reply_sent_by_tool || session::check_signal_file(thread_path).await;
             if sent {
                 return Ok(GenerateReplyResult {
@@ -482,6 +534,8 @@ impl OpenCodeService {
 
         // Timeout
         if result.timed_out {
+            // Input tokens already persisted per step in client.rs
+            
             if session::check_signal_file(thread_path).await {
                 return Ok(GenerateReplyResult {
                     reply_sent_by_tool: true,
@@ -508,6 +562,8 @@ impl OpenCodeService {
         } else {
             extract_text_from_parts(&result.parts).unwrap_or_default()
         };
+
+        // Input tokens already persisted per step in client.rs
 
         Ok(GenerateReplyResult {
             reply_sent_by_tool: false,

@@ -159,6 +159,7 @@ pub fn truncate_text(text: &str, max_chars: usize) -> String {
 #[derive(Debug)]
 pub struct ParsedStoredMessage {
     pub sender: Option<String>,
+    #[allow(dead_code)]
     pub sender_address: Option<String>,
     pub timestamp: Option<String>,
     pub topic: Option<String>,
@@ -167,9 +168,11 @@ pub struct ParsedStoredMessage {
     pub channel: Option<String>,
     #[allow(dead_code)]
     pub uid: Option<String>,
+    #[allow(dead_code)]
     pub external_id: Option<String>,
     #[allow(dead_code)]
     pub reply_to_id: Option<String>,
+    #[allow(dead_code)]
     pub thread_refs: Option<Vec<String>>,
     #[allow(dead_code)]
     pub matched_pattern: Option<String>,
@@ -810,16 +813,36 @@ pub async fn prepare_body_for_quoting(
     quoted_blocks.join("\n\n")
 }
 
-/// Build a footer with model and mode information.
+/// Build a footer with model, mode, and token information.
 ///
 /// Returns empty string if both model and mode are None.
-/// Format: `---\n\nModel: <model> | Mode: <mode>`
-pub fn build_footer(model: Option<&str>, mode: Option<&str>) -> String {
-    match (model, mode) {
-        (Some(m), Some(md)) => format!("---\n\nModel: {} | Mode: {}", m, md),
-        (Some(m), None) => format!("---\n\nModel: {}", m),
-        (None, Some(md)) => format!("---\n\nMode: {}", md),
-        (None, None) => String::new(),
+/// Format: `---\n\nModel: <model> | Mode: <mode> | Tokens: <current>K/<max>K`
+pub fn build_footer(model: Option<&str>, mode: Option<&str>, input_tokens: Option<u64>, max_tokens: Option<u64>) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(m) = model {
+        parts.push(format!("Model: {}", m));
+    }
+    if let Some(md) = mode {
+        parts.push(format!("Mode: {}", md));
+    }
+    match (input_tokens, max_tokens) {
+        (Some(current), Some(max)) => {
+            let current_k = current as f64 / 1024.0;
+            let max_k = max as f64 / 1024.0;
+            parts.push(format!("Tokens: {:.1}K/{:.0}K", current_k, max_k));
+        }
+        (Some(current), None) => {
+            let current_k = current as f64 / 1024.0;
+            parts.push(format!("Tokens: {:.1}K", current_k));
+        }
+        _ => {}
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("---\n\n{}", parts.join(" | "))
     }
 }
 
@@ -856,6 +879,8 @@ pub async fn build_full_reply_text(
     message_dir: &str,
     model: Option<&str>,
     mode: Option<&str>,
+    input_tokens: Option<u64>,
+    max_tokens: Option<u64>,
 ) -> String {
     let current_message = TrailCurrentMessage {
         sender: sender.to_string(),
@@ -872,7 +897,7 @@ pub async fn build_full_reply_text(
     )
     .await;
 
-    let footer = build_footer(model, mode);
+    let footer = build_footer(model, mode, input_tokens, max_tokens);
 
     if quoted_history.is_empty() && footer.is_empty() {
         reply_text.to_string()

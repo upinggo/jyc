@@ -169,6 +169,10 @@ pub struct OpenCodeConfig {
 
     /// System prompt for the AI
     pub system_prompt: Option<String>,
+
+    /// Maximum input tokens per session before resetting.
+    /// If not set, uses 95% of the model's context window, or 120K as fallback.
+    pub max_input_tokens: Option<u64>,
 }
 
 /// Alerting configuration — error digests and health checks.

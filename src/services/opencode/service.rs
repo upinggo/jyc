@@ -352,8 +352,7 @@ impl OpenCodeService {
             "Sending prompt to OpenCode"
         );
 
-        // Start tracking active time for this session
-        session::start_active_time_tracking(thread_path).await.ok();
+
 
         let sse_result = client
             .prompt_with_sse(&session_id, thread_path, &request, &mode_label, pending_rx)
@@ -370,8 +369,7 @@ impl OpenCodeService {
             }
             Err(e) => {
                 tracing::error!(error = %e, "SSE streaming failed, trying blocking fallback");
-                // Ensure active time tracking is started for blocking fallback
-                session::start_active_time_tracking(thread_path).await.ok();
+
                 let blocking_result = client
                     .prompt_blocking(&session_id, thread_path, &request)
                     .await?;
@@ -382,9 +380,7 @@ impl OpenCodeService {
             }
         };
 
-        // Update session timestamp and stop active time tracking
-        session::update_session_timestamp(thread_path).await.ok();
-        session::stop_active_time_tracking(thread_path).await.ok();
+
 
         // Handle the result
         // Note: OpenCodeClient will publish ProcessingCompleted event for successful cases

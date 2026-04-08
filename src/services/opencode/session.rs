@@ -17,19 +17,9 @@ pub struct SessionState {
     pub created_at: String,
     #[serde(rename = "lastUsedAt")]
     pub last_used_at: String,
-    /// Total active time in seconds (accumulated over session lifetime)
-    #[serde(rename = "totalActiveTime", default)]
-    pub total_active_time: u64,
     /// Total input tokens accumulated in this session
     #[serde(rename = "totalInputTokens", default)]
     pub total_input_tokens: u64,
-    /// Timestamp when current active period started (if session is currently active)
-    #[serde(
-        rename = "lastActiveStart",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub last_active_start: Option<String>,
 }
 
 
@@ -116,9 +106,7 @@ pub async fn create_new_session(client: &OpenCodeClient, thread_path: &Path) -> 
         session_id: session.id.clone(),
         created_at: chrono::Utc::now().to_rfc3339(),
         last_used_at: chrono::Utc::now().to_rfc3339(),
-        total_active_time: 0,
         total_input_tokens: 0,
-        last_active_start: None,
     };
 
     save_session_state(thread_path, &state).await?;
@@ -137,31 +125,7 @@ pub async fn delete_session(thread_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Update the lastUsedAt timestamp and track active time.
-pub async fn update_session_timestamp(thread_path: &Path) -> Result<()> {
-    let state_path = thread_path.join(".jyc").join("opencode-session.json");
-    if let Ok(content) = tokio::fs::read_to_string(&state_path).await {
-        if let Ok(mut state) = serde_json::from_str::<SessionState>(&content) {
-            let now = chrono::Utc::now();
-            state.last_used_at = now.to_rfc3339();
-            save_session_state(thread_path, &state).await?;
-        }
-    }
-    Ok(())
-}
 
-/// Start tracking active time for a session.
-pub async fn start_active_time_tracking(thread_path: &Path) -> Result<()> {
-    let state_path = thread_path.join(".jyc").join("opencode-session.json");
-    if let Ok(content) = tokio::fs::read_to_string(&state_path).await {
-        if let Ok(mut state) = serde_json::from_str::<SessionState>(&content) {
-            let now = chrono::Utc::now();
-            state.last_active_start = Some(now.to_rfc3339());
-            save_session_state(thread_path, &state).await?;
-        }
-    }
-    Ok(())
-}
 
 /// Add input tokens to session and save updated state.
 pub async fn add_input_tokens(thread_path: &Path, input_tokens: u64) -> Result<()> {
@@ -183,34 +147,7 @@ pub async fn add_input_tokens(thread_path: &Path, input_tokens: u64) -> Result<(
     Ok(())
 }
 
-/// Stop tracking active time and accumulate it to total active time.
-pub async fn stop_active_time_tracking(thread_path: &Path) -> Result<()> {
-    let state_path = thread_path.join(".jyc").join("opencode-session.json");
-    if let Ok(content) = tokio::fs::read_to_string(&state_path).await {
-        if let Ok(mut state) = serde_json::from_str::<SessionState>(&content) {
-            if let Some(start_time_str) = &state.last_active_start {
-                if let Ok(start_time) = chrono::DateTime::parse_from_rfc3339(start_time_str) {
-                    let now = chrono::Utc::now();
-                    let active_duration = now.signed_duration_since(start_time);
-                    let active_seconds = active_duration.num_seconds().max(0) as u64;
 
-                    state.total_active_time += active_seconds;
-                    state.last_active_start = None;
-
-                    tracing::debug!(
-                        session_id = %state.session_id,
-                        active_seconds = active_seconds,
-                        total_active_time = state.total_active_time,
-                        "Accumulated active time"
-                    );
-
-                    save_session_state(thread_path, &state).await?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
 
 /// Save session state to `.jyc/opencode-session.json`.
 async fn save_session_state(thread_path: &Path, state: &SessionState) -> Result<()> {
@@ -459,9 +396,7 @@ mod tests {
             session_id: "sess_123".to_string(),
             created_at: "2026-03-27T10:00:00Z".to_string(),
             last_used_at: "2026-03-27T10:00:00Z".to_string(),
-            total_active_time: 0,
             total_input_tokens: 0,
-            last_active_start: None,
         };
 
         save_session_state(&thread_path, &state).await.unwrap();
@@ -512,9 +447,7 @@ mod tests {
             session_id: "test-session".to_string(),
             created_at: start.to_rfc3339(),
             last_used_at: end.to_rfc3339(),
-            total_active_time: 0,
             total_input_tokens: 0,
-            last_active_start: None,
         };
 
         let duration = calculate_session_duration(&state).unwrap();

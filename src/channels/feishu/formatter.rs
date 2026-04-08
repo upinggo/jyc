@@ -9,10 +9,12 @@ use serde_json::Value;
 use super::config::FeishuConfig;
 
 /// Format message for Feishu API
+#[allow(dead_code)]
 pub struct FeishuFormatter {
     config: FeishuConfig,
 }
 
+#[allow(dead_code)]
 impl FeishuFormatter {
     /// Create a new formatter
     pub fn new(config: FeishuConfig) -> Self {
@@ -88,6 +90,7 @@ impl FeishuFormatter {
 }
 
 /// Escape special characters for JSON string
+#[allow(dead_code)]
 fn escape_json_string(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")
@@ -97,6 +100,7 @@ fn escape_json_string(s: &str) -> String {
 }
 
 /// Escape markdown special characters
+#[allow(dead_code)]
 fn escape_markdown(s: &str) -> String {
     s.replace('*', "\\*")
         .replace('_', "\\_")
@@ -113,6 +117,7 @@ fn escape_markdown(s: &str) -> String {
 }
 
 /// Escape HTML special characters
+#[allow(dead_code)]
 fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")

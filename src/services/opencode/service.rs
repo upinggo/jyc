@@ -54,6 +54,7 @@ impl OpenCodeService {
     }
     
     /// Create a new OpenCodeService with optional event bus.
+    #[allow(dead_code)]
     pub fn new_with_event_bus(
         server: Arc<OpenCodeServer>,
         agent_config: Arc<AgentConfig>,
@@ -71,6 +72,7 @@ impl OpenCodeService {
     }
     
     /// Helper method to publish an event if event bus is available.
+    #[allow(dead_code)]
     async fn publish_event(&self, event: ThreadEvent) {
         let event_bus_lock = self.event_bus.lock().await;
         if let Some(event_bus) = &*event_bus_lock {
@@ -105,6 +107,7 @@ impl OpenCodeService {
     /// 
     /// Heartbeat events are sent at regular intervals during long-running
     /// processing to indicate the agent is still working.
+    #[allow(dead_code)]
     async fn publish_heartbeat(
         &self,
         thread_name: &str,
@@ -125,6 +128,7 @@ impl OpenCodeService {
     /// 
     /// Returns true if enough time has passed since the last heartbeat
     /// and minimum elapsed time has been reached.
+    #[allow(dead_code)]
     fn should_send_heartbeat(
         last_heartbeat_time: Option<Instant>,
         elapsed_since_start: Duration,
@@ -145,6 +149,7 @@ impl OpenCodeService {
     }
     
     /// Helper method to publish ProcessingProgress event.
+    #[allow(dead_code)]
     async fn publish_processing_progress(
         &self,
         thread_name: &str,
@@ -167,11 +172,13 @@ impl OpenCodeService {
     
     /// Set the event bus for this agent.
     /// This allows the event bus to be set after the agent is created.
+    #[allow(dead_code)]
     pub async fn set_event_bus(&self, event_bus: Option<ThreadEventBusRef>) {
         let mut event_bus_lock = self.event_bus.lock().await;
         *event_bus_lock = event_bus;
     }
 
+    #[allow(dead_code)]
     async fn set_thread_event_bus(&self, thread_name: &str, event_bus: Option<ThreadEventBusRef>) {
         tracing::debug!(
             thread_name = %thread_name,

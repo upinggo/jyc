@@ -135,7 +135,7 @@ pub async fn delete_session(thread_path: &Path) -> Result<()> {
 
 
 
-/// Add input tokens to session and save updated state.
+/// Update input tokens in session state (write raw value from SSE, not accumulated).
 pub async fn add_input_tokens(thread_path: &Path, input_tokens: u64) -> Result<()> {
     let state_path = thread_path.join(".jyc").join("opencode-session.json");
     tracing::debug!("add_input_tokens: path={}, tokens={}", state_path.display(), input_tokens);
@@ -150,17 +150,15 @@ pub async fn add_input_tokens(thread_path: &Path, input_tokens: u64) -> Result<(
             tracing::debug!("Read session file, length: {}", content.len());
             match serde_json::from_str::<SessionState>(&content) {
                 Ok(mut state) => {
-                    tracing::debug!("Parsed session state: id={}, old_total={}", 
-                        state.session_id, state.total_input_tokens);
-                    
-                    state.total_input_tokens += input_tokens;
+                    let old_tokens = state.total_input_tokens;
+                    state.total_input_tokens = input_tokens;
                     state.last_used_at = chrono::Utc::now().to_rfc3339();
                     
                     tracing::info!(
                         session_id = %state.session_id,
                         input_tokens = input_tokens,
-                        total_input_tokens = state.total_input_tokens,
-                        "Added input tokens to session"
+                        previous_input_tokens = old_tokens,
+                        "Updated input tokens in session"
                     );
                     
                     match save_session_state(thread_path, &state).await {
@@ -338,6 +336,7 @@ fn get_reply_tool_command() -> Vec<String> {
 
 
 /// Calculate session duration in seconds.
+#[allow(dead_code)]
 pub fn calculate_session_duration(state: &SessionState) -> Result<u64> {
     let created = chrono::DateTime::parse_from_rfc3339(&state.created_at)
         .context("failed to parse created_at timestamp")?;
@@ -364,6 +363,7 @@ pub fn calculate_session_duration(state: &SessionState) -> Result<u64> {
 ///
 /// Counts `type:received` entries in `chat_history_*.md` files.
 /// Falls back to counting `messages/` subdirectories for legacy threads.
+#[allow(dead_code)]
 pub async fn count_messages(thread_path: &Path) -> Result<usize> {
     // Primary: count entries in chat log files
     let pattern = thread_path.join("chat_history_*.md");

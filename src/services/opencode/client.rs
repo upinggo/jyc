@@ -36,6 +36,7 @@ impl OpenCodeClient {
     }
     
     /// Create a new client with an event bus for publishing thread events.
+    #[allow(dead_code)]
     pub fn with_event_bus(base_url: &str, event_bus: Option<ThreadEventBusRef>) -> Self {
         Self {
             http: reqwest::Client::new(),
@@ -45,6 +46,7 @@ impl OpenCodeClient {
     }
 
     /// Create a client reusing an existing reqwest::Client (shares connection pool).
+    #[allow(dead_code)]
     pub fn with_http_client(base_url: &str, http: reqwest::Client) -> Self {
         Self {
             http,
@@ -67,6 +69,7 @@ impl OpenCodeClient {
     }
     
     /// Helper method to publish an event if event bus is available.
+    #[allow(dead_code)]
     async fn publish_event(&self, event: ThreadEvent) {
         if let Some(event_bus) = &self.event_bus {
             match event_bus.publish(event).await {

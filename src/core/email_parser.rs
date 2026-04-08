@@ -159,6 +159,7 @@ pub fn truncate_text(text: &str, max_chars: usize) -> String {
 #[derive(Debug)]
 pub struct ParsedStoredMessage {
     pub sender: Option<String>,
+    #[allow(dead_code)]
     pub sender_address: Option<String>,
     pub timestamp: Option<String>,
     pub topic: Option<String>,
@@ -167,9 +168,11 @@ pub struct ParsedStoredMessage {
     pub channel: Option<String>,
     #[allow(dead_code)]
     pub uid: Option<String>,
+    #[allow(dead_code)]
     pub external_id: Option<String>,
     #[allow(dead_code)]
     pub reply_to_id: Option<String>,
+    #[allow(dead_code)]
     pub thread_refs: Option<Vec<String>>,
     #[allow(dead_code)]
     pub matched_pattern: Option<String>,

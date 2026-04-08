@@ -115,6 +115,7 @@ impl ThreadEvent {
     }
 
     /// Get the timestamp from the event.
+    #[allow(dead_code)]
     pub fn timestamp(&self) -> DateTime<Utc> {
         match self {
             ThreadEvent::Heartbeat { timestamp, .. } => *timestamp,

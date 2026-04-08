@@ -15,6 +15,7 @@ use super::config::FeishuConfig;
 
 /// Feishu client errors.
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum FeishuError {
     /// Client not initialized
     #[error("Feishu client not initialized. Call initialize() first")]
@@ -100,6 +101,7 @@ impl FeishuClient {
     ///
     /// Uses the openlark AuthService to request a tenant_access_token.
     /// The token is managed internally by the SDK with caching.
+    #[allow(dead_code)]
     pub async fn get_token(&self) -> Result<String> {
         let core_config = self.get_core_config().await?;
         let auth = open_lark::auth::AuthService::new(core_config);

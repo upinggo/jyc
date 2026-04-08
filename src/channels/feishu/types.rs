@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 /// Feishu message content in various formats.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct FeishuMessageContent {
     /// Text content
     pub text: Option<String>,
@@ -21,6 +22,7 @@ pub struct FeishuMessageContent {
 
 /// Feishu user information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct FeishuUser {
     /// User ID
     pub user_id: String,
@@ -32,6 +34,7 @@ pub struct FeishuUser {
 
 /// Feishu chat information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct FeishuChat {
     /// Chat ID
     pub chat_id: String,
@@ -43,6 +46,7 @@ pub struct FeishuChat {
 
 /// Feishu message event from WebSocket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct FeishuMessageEvent {
     /// Message ID
     pub message_id: String,
@@ -65,6 +69,7 @@ pub struct FeishuMessageEvent {
 /// Feishu event types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[allow(dead_code)]
 pub enum FeishuEvent {
     /// Message received event
     #[serde(rename = "im.message.receive_v1")]
@@ -103,10 +108,13 @@ pub struct EventHeader {
     /// Event type, e.g. "im.message.receive_v1"
     pub event_type: String,
     /// Event creation time (Unix timestamp string in milliseconds)
+    #[allow(dead_code)]
     pub create_time: Option<String>,
     /// App ID that received the event
+    #[allow(dead_code)]
     pub app_id: Option<String>,
     /// Tenant key
+    #[allow(dead_code)]
     pub tenant_key: Option<String>,
 }
 
@@ -122,7 +130,9 @@ pub struct EventBody {
 pub struct EventSender {
     pub sender_id: SenderIds,
     /// "user" or "bot"
+    #[allow(dead_code)]
     pub sender_type: Option<String>,
+    #[allow(dead_code)]
     pub tenant_key: Option<String>,
 }
 
@@ -130,7 +140,9 @@ pub struct EventSender {
 #[derive(Debug, Deserialize)]
 pub struct SenderIds {
     pub open_id: Option<String>,
+    #[allow(dead_code)]
     pub user_id: Option<String>,
+    #[allow(dead_code)]
     pub union_id: Option<String>,
 }
 
@@ -172,7 +184,9 @@ pub struct EventMention {
 #[derive(Debug, Deserialize)]
 pub struct MentionIds {
     pub open_id: Option<String>,
+    #[allow(dead_code)]
     pub user_id: Option<String>,
+    #[allow(dead_code)]
     pub union_id: Option<String>,
 }
 

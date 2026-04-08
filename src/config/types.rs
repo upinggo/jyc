@@ -170,9 +170,10 @@ pub struct OpenCodeConfig {
     /// System prompt for the AI
     pub system_prompt: Option<String>,
 
-    /// Maximum input tokens per session before resetting
-    #[serde(default = "default_max_input_tokens")]
-    pub max_input_tokens: u64,
+    /// Maximum input tokens per session before resetting.
+    /// If not set, uses 95% of the model's context window, or 120K as fallback.
+    #[serde(default)]
+    pub max_input_tokens: Option<u64>,
 }
 
 /// Alerting configuration — error digests and health checks.
@@ -302,10 +303,6 @@ fn default_60() -> u64 {
 
 fn default_600() -> u64 {
     600
-}
-
-fn default_max_input_tokens() -> u64 {
-    108_000 // 108K tokens
 }
 
 fn default_1_0() -> f64 {

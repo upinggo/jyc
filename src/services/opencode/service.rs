@@ -276,10 +276,10 @@ impl OpenCodeService {
         // 1. Config override (agent.opencode.max_input_tokens)
         // 2. 95% of the model's context window (from OpenCode /provider API)
         // 3. Default (120K)
-        let config_max_tokens = self.agent_config
+        let config_max_tokens: Option<u64> = self.agent_config
             .opencode
             .as_ref()
-            .map(|oc| oc.max_input_tokens);
+            .and_then(|oc| oc.max_input_tokens);
 
         let max_input_tokens = if config_max_tokens.is_some() {
             tracing::debug!(

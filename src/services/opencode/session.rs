@@ -69,6 +69,10 @@ pub async fn get_or_create_session(
                             session_id = %state.session_id,
                             "Reusing existing session"
                         );
+                        // Update last_used_at when session is reused
+                        let mut updated_state = state.clone();
+                        updated_state.last_used_at = chrono::Utc::now().to_rfc3339();
+                        let _ = save_session_state(thread_path, &updated_state).await;
                         return Ok((state.session_id, false));
                     }
                     Ok(None) => {
@@ -150,6 +154,7 @@ pub async fn add_input_tokens(thread_path: &Path, input_tokens: u64) -> Result<(
                         state.session_id, state.total_input_tokens);
                     
                     state.total_input_tokens += input_tokens;
+                    state.last_used_at = chrono::Utc::now().to_rfc3339();
                     
                     tracing::info!(
                         session_id = %state.session_id,

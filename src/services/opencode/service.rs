@@ -258,7 +258,7 @@ impl OpenCodeService {
             .opencode
             .as_ref()
             .map(|oc| oc.max_input_tokens);
-        let session_id = session::get_or_create_session(
+        let (session_id, session_reset_due_to_tokens) = session::get_or_create_session(
             &client, 
             thread_path,
             max_input_tokens,
@@ -327,6 +327,7 @@ impl OpenCodeService {
             message,
             thread_path,
             message_dir,
+            session_reset_due_to_tokens,
         ).await?;
 
         // Model and mode are passed per-prompt — no session restart needed for switches

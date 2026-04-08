@@ -138,13 +138,20 @@ The chat history provides context about ongoing discussions, past decisions, and
 ///
 /// Includes:
 /// - Incoming message body (stripped, truncated)
+/// - Optional session reset notification if session was reset due to token limit
 /// Note: Reply context is saved to disk (.jyc/reply-context.json), NOT embedded in prompt.
 pub async fn build_prompt(
     message: &InboundMessage,
     _thread_path: &Path,
     _message_dir: &str,
+    session_was_reset_due_to_tokens: bool,
 ) -> Result<String> {
     let mut prompt = String::new();
+
+    // Session reset notification (if applicable)
+    if session_was_reset_due_to_tokens {
+        prompt.push_str("⚠️ **Note:** The session has been reset because the input token limit (108K) was exceeded. This ensures response quality by clearing the conversation history.\n\n");
+    }
 
     // Incoming message
     prompt.push_str("## Incoming Message\n");
@@ -242,7 +249,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let msg = test_message();
 
-        let prompt = build_prompt(&msg, tmp.path(), "2026-03-27_10-00-00")
+        let prompt = build_prompt(&msg, tmp.path(), "2026-03-27_10-00-00", false)
             .await
             .unwrap();
 
@@ -252,5 +259,25 @@ mod tests {
         assert!(prompt.contains("Hello, help me."));
         // No REPLY_TOKEN in prompt — context is on disk
         assert!(!prompt.contains("REPLY_TOKEN="));
+        // No session reset notification
+        assert!(!prompt.contains("session has been reset"));
+    }
+
+    #[tokio::test]
+    async fn test_build_prompt_with_session_reset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let msg = test_message();
+
+        let prompt = build_prompt(&msg, tmp.path(), "2026-03-27_10-00-00", true)
+            .await
+            .unwrap();
+
+        assert!(prompt.contains("## Incoming Message"));
+        assert!(prompt.contains("John"));
+        assert!(prompt.contains("john@example.com"));
+        assert!(prompt.contains("Hello, help me."));
+        // Should contain session reset notification
+        assert!(prompt.contains("session has been reset"));
+        assert!(prompt.contains("input token limit (108K)"));
     }
 }

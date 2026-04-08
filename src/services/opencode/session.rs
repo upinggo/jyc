@@ -33,11 +33,13 @@ pub struct SessionState {
 /// 3. If exceeded → delete old session and create new one
 /// 4. Verify session still exists via API
 /// 5. If missing → create new session
+///
+/// Returns: (session_id, session_was_reset_due_to_token_limit)
 pub async fn get_or_create_session(
     client: &OpenCodeClient,
     thread_path: &Path,
     max_input_tokens: Option<u64>,
-) -> Result<String> {
+) -> Result<(String, bool)> {
     let state_path = thread_path.join(".jyc").join("opencode-session.json");
 
     // Try loading existing session
@@ -56,7 +58,8 @@ pub async fn get_or_create_session(
 
                     // Delete old session and create new one
                     delete_session(thread_path).await?;
-                    return create_new_session(client, thread_path).await;
+                    let new_session_id = create_new_session(client, thread_path).await?;
+                    return Ok((new_session_id, true));
                 }
 
                 // Verify session still exists
@@ -66,7 +69,7 @@ pub async fn get_or_create_session(
                             session_id = %state.session_id,
                             "Reusing existing session"
                         );
-                        return Ok(state.session_id);
+                        return Ok((state.session_id, false));
                     }
                     Ok(None) => {
                         tracing::info!(
@@ -86,7 +89,8 @@ pub async fn get_or_create_session(
     }
 
     // Create new session
-    create_new_session(client, thread_path).await
+    let session_id = create_new_session(client, thread_path).await?;
+    Ok((session_id, false))
 }
 
 /// Create a fresh session for a thread.
@@ -130,21 +134,54 @@ pub async fn delete_session(thread_path: &Path) -> Result<()> {
 /// Add input tokens to session and save updated state.
 pub async fn add_input_tokens(thread_path: &Path, input_tokens: u64) -> Result<()> {
     let state_path = thread_path.join(".jyc").join("opencode-session.json");
-    if let Ok(content) = tokio::fs::read_to_string(&state_path).await {
-        if let Ok(mut state) = serde_json::from_str::<SessionState>(&content) {
-            state.total_input_tokens += input_tokens;
-            
-            tracing::debug!(
-                session_id = %state.session_id,
-                input_tokens = input_tokens,
-                total_input_tokens = state.total_input_tokens,
-                "Added input tokens to session"
-            );
-            
-            save_session_state(thread_path, &state).await?;
+    tracing::debug!("add_input_tokens: path={}, tokens={}", state_path.display(), input_tokens);
+    
+    if !state_path.exists() {
+        tracing::warn!("Session state file does not exist: {}", state_path.display());
+        return Ok(());
+    }
+    
+    match tokio::fs::read_to_string(&state_path).await {
+        Ok(content) => {
+            tracing::debug!("Read session file, length: {}", content.len());
+            match serde_json::from_str::<SessionState>(&content) {
+                Ok(mut state) => {
+                    tracing::debug!("Parsed session state: id={}, old_total={}", 
+                        state.session_id, state.total_input_tokens);
+                    
+                    state.total_input_tokens += input_tokens;
+                    
+                    tracing::info!(
+                        session_id = %state.session_id,
+                        input_tokens = input_tokens,
+                        total_input_tokens = state.total_input_tokens,
+                        "Added input tokens to session"
+                    );
+                    
+                    match save_session_state(thread_path, &state).await {
+                        Ok(_) => {
+                            tracing::debug!("Successfully saved updated session state");
+                            Ok(())
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to save session state");
+                            Err(e)
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to parse session state JSON");
+                    // Try to create a new session state
+                    tracing::warn!("Creating new session state due to parse error");
+                    Err(e.into())
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to read session state file");
+            Err(e.into())
         }
     }
-    Ok(())
 }
 
 

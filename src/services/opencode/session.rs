@@ -6,7 +6,7 @@ use super::client::OpenCodeClient;
 use crate::config::types::AgentConfig;
 
 /// Default maximum input tokens per session before resetting
-pub const DEFAULT_MAX_INPUT_TOKENS: u64 = 120_000; // 120K tokens
+pub const DEFAULT_MAX_INPUT_TOKENS: u64 = 120 * 1024; // 120K tokens
 
 /// Per-thread session state, persisted in `.jyc/opencode-session.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]

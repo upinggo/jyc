@@ -828,12 +828,12 @@ pub fn build_footer(model: Option<&str>, mode: Option<&str>, input_tokens: Optio
     }
     match (input_tokens, max_tokens) {
         (Some(current), Some(max)) => {
-            let current_k = current as f64 / 1000.0;
-            let max_k = max as f64 / 1000.0;
+            let current_k = current as f64 / 1024.0;
+            let max_k = max as f64 / 1024.0;
             parts.push(format!("Tokens: {:.1}K/{:.0}K", current_k, max_k));
         }
         (Some(current), None) => {
-            let current_k = current as f64 / 1000.0;
+            let current_k = current as f64 / 1024.0;
             parts.push(format!("Tokens: {:.1}K", current_k));
         }
         _ => {}

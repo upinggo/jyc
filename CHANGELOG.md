@@ -4,11 +4,20 @@ All notable changes to JYC will be documented in this file.
 
 ## [0.1.4] - 2026-04-09
 
-### Changed
+### Added
 
-**Version bump** — Prepare for upcoming features
-- Version increment for upcoming feature integration
-- Maintain compatibility with existing configurations
+**Enhanced PLAN Mode Prompt Builder** — Clearer instructions and mode parameter support
+- Updated PLAN mode system prompt with clearer allowed/prohibited actions
+- Added mode parameter to `build_prompt` function for proper PLAN mode detection
+- Improved test coverage for PLAN mode scenarios
+
+### Fixed
+
+**Duplicate Footer Separators** — Prevent duplicate '---' in Feishu and email replies
+- Added `strip_trailing_separators()` function to email_parser module
+- Clean reply text before adding footer in Feishu outbound adapter
+- Clean reply text before adding footer in `build_full_reply_text` function
+- Root cause: AI replies sometimes end with '---' separators, causing duplicates
 
 ## [0.1.3] - 2026-04-08
 

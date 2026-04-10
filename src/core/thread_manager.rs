@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, Semaphore};
 use tokio::task::JoinHandle;
@@ -66,6 +67,9 @@ pub struct ThreadManager {
     // Per-channel heartbeat message template (supports {elapsed} placeholder)
     heartbeat_template: String,
 
+    // Template directory for thread initialization
+    template_dir: PathBuf,
+
     cancel: CancellationToken,
     worker_handles: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -82,6 +86,7 @@ impl ThreadManager {
         cancel: CancellationToken,
         heartbeat_config: HeartbeatConfig,
         heartbeat_template: String,
+        template_dir: PathBuf,
     ) -> Self {
         Self::new_with_options(
             max_concurrent,
@@ -93,6 +98,7 @@ impl ThreadManager {
             true, // enable_events: true by default (Thread Event system)
             heartbeat_config,
             heartbeat_template,
+            template_dir,
         )
     }
     
@@ -107,6 +113,7 @@ impl ThreadManager {
         enable_events: bool,
         heartbeat_config: HeartbeatConfig,
         heartbeat_template: String,
+        template_dir: PathBuf,
     ) -> Self {
         Self {
             thread_queues: Mutex::new(HashMap::new()),
@@ -119,6 +126,7 @@ impl ThreadManager {
             enable_events,
             heartbeat_config,
             heartbeat_template,
+            template_dir,
             cancel: cancel.child_token(),
             worker_handles: Mutex::new(Vec::new()),
         }
@@ -231,6 +239,7 @@ impl ThreadManager {
         let agent = self.agent.clone();
         let heartbeat_config = self.heartbeat_config.clone();
         let heartbeat_template = self.heartbeat_template.clone();
+        let template_dir = self.template_dir.clone();
         let tm_span = tracing::info_span!("tm", t = %thread_name);
 
         tokio::spawn(async move {
@@ -307,6 +316,7 @@ impl ThreadManager {
                     outbound.as_ref(),
                     agent.clone(),
                     &mut rx,
+                    &template_dir,
                 ).await {
                     tracing::error!(
                         error = %e,
@@ -577,6 +587,7 @@ async fn process_message(
     outbound: &dyn OutboundAdapter,
     agent: Arc<dyn AgentService>,
     pending_rx: &mut mpsc::Receiver<QueueItem>,
+    template_dir: &PathBuf,
 ) -> Result<()> {
     let message = &item.message;
 
@@ -614,6 +625,7 @@ async fn process_message(
         ).unwrap()),
         channel: message.channel.clone(),
         agent: Some(agent.clone()),
+        template_dir: template_dir.clone(),
     };
 
     let cmd_output = command_registry

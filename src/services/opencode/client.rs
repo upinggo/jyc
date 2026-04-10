@@ -930,6 +930,24 @@ impl OpenCodeClient {
                         }
                     }
 
+                    // Log reasoning/thinking content
+                    if part.part_type == "reasoning" {
+                        if let Some(ref text) = part.text {
+                            if !text.is_empty() {
+                                let preview = if text.len() > 300 {
+                                    format!("{}...", &text[..text.floor_char_boundary(300)])
+                                } else {
+                                    text.clone()
+                                };
+                                tracing::debug!(
+                                    len = text.len(),
+                                    text = %preview,
+                                    "AI thinking"
+                                );
+                            }
+                        }
+                    }
+
                     // Accumulate / replace part by ID (deduplication)
                     if let Some(ref id) = part.id {
                         parts.insert(id.clone(), part);

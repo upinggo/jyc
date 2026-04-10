@@ -366,6 +366,14 @@ impl OpenCodeClient {
 
         // 3. Process SSE events
         let mut result = SseResult::default();
+
+        // If model is known upfront (from config or /model override), record on span immediately.
+        // Set model_recorded flag to prevent SSE handler from adding a duplicate.
+        if let Some(ref model_ref) = request.model {
+            let model_str = format!("{}/{}:{}", model_ref.provider_id, model_ref.model_id, mode_label);
+            tracing::Span::current().record("m", &model_str);
+            result.model_recorded = true;
+        }
         let mut parts: HashMap<String, ResponsePart> = HashMap::new();
         let mut last_activity = Instant::now();
         let mut last_progress_log = Instant::now();

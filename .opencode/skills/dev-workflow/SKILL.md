@@ -76,7 +76,7 @@ Phase 1 — Present plan:
 - Show current version, new version, and all changes to be documented
 - List files to modify: `Cargo.toml`, `CHANGELOG.md`, optionally `DESIGN.md`
 
-Phase 2 — After user confirms, execute:
+Phase 2 — After user confirms, execute ALL steps in sequence:
 
 1. Update `Cargo.toml` version field
 2. Update `CHANGELOG.md`:
@@ -84,9 +84,13 @@ Phase 2 — After user confirms, execute:
    - Group changes: Added, Fixed, Changed, Removed
    - Include date: `## [X.Y.Z] - YYYY-MM-DD`
 3. Update `DESIGN.md` if architecture changed
-4. Commit: `chore: prepare release vX.Y.Z`
-5. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z: summary of key changes"`
-6. Push: `git push origin main --tags`
+4. Run `cargo test` to verify
+5. Commit ALL changes: `chore: prepare release vX.Y.Z`
+6. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z: summary of key changes"`
+7. Push with tags: `git push origin main --tags`
+
+IMPORTANT: Steps 5-7 (commit, tag, push) are part of the release process.
+Do NOT stop after updating files — complete all steps through push.
 
 ## Critical Rules
 

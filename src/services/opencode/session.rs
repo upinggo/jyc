@@ -291,13 +291,13 @@ pub async fn ensure_thread_opencode_setup(
         schema: "https://opencode.ai/config.json".to_string(),
         model,
         small_model,
-        // Allow external_directory only if the thread has symlinked or local skills.
+        // Allow external_directory if the thread contains any symlinks pointing outside.
         // This prevents plan mode sub-agent deadlock (external_directory:ask + question:deny)
-        // while keeping other threads restricted.
+        // while keeping threads without external references restricted.
         permission: {
-            let skills_path = thread_path.join(".opencode").join("skills");
-            let needs_external = skills_path.is_symlink() || skills_path.exists();
+            let needs_external = has_external_symlinks(thread_path);
             if needs_external {
+                tracing::debug!("Thread has external symlinks, allowing external_directory");
                 serde_json::json!({
                     "question": "deny",
                     "external_directory": "allow"
@@ -397,6 +397,32 @@ pub async fn read_mode_override(thread_path: &Path) -> Option<String> {
 /// Resolves the jyc binary path and returns `["/path/to/jyc", "mcp-reply-tool"]`.
 fn get_reply_tool_command() -> Vec<String> {
     get_mcp_tool_command("mcp-reply-tool")
+}
+
+/// Check if the thread directory contains any symlinks (up to 3 levels deep).
+/// Symlinks typically point to external content (e.g., jyc repo, shared skills).
+fn has_external_symlinks(thread_path: &Path) -> bool {
+    fn scan_dir(dir: &Path, depth: u8) -> bool {
+        if depth == 0 {
+            return false;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_symlink() {
+                return true;
+            }
+            if path.is_dir() && !path.file_name().is_some_and(|n| n == "messages" || n == "attachments" || n == "node_modules") {
+                if scan_dir(&path, depth - 1) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    scan_dir(thread_path, 3)
 }
 
 fn get_question_tool_command() -> Vec<String> {

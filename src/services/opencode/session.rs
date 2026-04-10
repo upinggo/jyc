@@ -218,6 +218,8 @@ struct OpencodeConfig {
     permission: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     agent: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<serde_json::Value>,
     mcp: serde_json::Value,
 }
 
@@ -299,6 +301,14 @@ pub async fn ensure_thread_opencode_setup(
                 "permission": {
                     "*": "allow",
                     "question": "deny"
+                }
+            }
+        })),
+        provider: Some(serde_json::json!({
+            "*": {
+                "options": {
+                    "timeout": 600000,
+                    "chunkTimeout": 120000
                 }
             }
         })),

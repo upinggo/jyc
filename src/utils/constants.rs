@@ -37,11 +37,11 @@ pub const OPENCODE_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(3);
 
 // --- SSE / Timeout ---
 /// Activity-based timeout: silence threshold (default, no tool running)
-/// 10 min allows for model thinking pauses between steps
-pub const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// 30 min allows for models with long thinking pauses (e.g., minimax)
+pub const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// Activity-based timeout: silence threshold when a tool is running
-/// 10 min to accommodate models with long thinking pauses (e.g., minimax)
-pub const TOOL_ACTIVITY_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// 30 min to accommodate models with long thinking pauses
+pub const TOOL_ACTIVITY_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// How often to check for activity timeout
 pub const ACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 /// How often to log progress

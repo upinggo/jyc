@@ -2,6 +2,12 @@
 
 All notable changes to JYC will be documented in this file.
 
+## [0.1.6] - 2026-04-10
+
+### Added
+
+- Bump version skill for automated version bumping workflow
+
 ## [0.1.5] - 2026-04-09
 
 ### Added

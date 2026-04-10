@@ -1,6 +1,8 @@
 ---
 name: dev-workflow
-description: Trunk-based development workflow - branching, fix/feature flow, release process, commit conventions. Use when planning development work, creating branches, merging, or preparing releases.
+description: |
+  Development workflow for jyc - branching, fix/feature flow, release process, version bump, commit conventions.
+  Use when: planning development work, creating branches, merging, preparing releases, bumping version, updating changelog.
 ---
 
 ## Development Flow: Trunk-Based with Short-Lived Branches
@@ -34,13 +36,56 @@ main ──●──●──●──●──●──●──●──●─
 5. Merge to main: `git checkout main && git merge feat/<name> --no-ff`
 6. Push
 
-## For Releases
+## For Releases (Version Bump)
 
-1. Bump version in `Cargo.toml`
-2. Update `CHANGELOG.md` with all changes since last release
+### Step 1: Verify Prerequisites
+
+```bash
+cd jyc
+git checkout main
+git status  # Must be clean
+LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+echo "Last tag: $LAST_TAG"
+```
+
+### Step 2: Review Changes Since Last Release
+
+```bash
+git log ${LAST_TAG}..HEAD --oneline
+git log ${LAST_TAG}..HEAD --pretty=format:"%s" | head -30
+```
+
+Categorize commits by type:
+- `feat:` → Added section
+- `fix:` → Fixed section
+- `refactor:` / `chore:` → Changed section
+- `docs:` → Documentation section
+
+### Step 3: Determine Version Number
+
+- Parse current version from `Cargo.toml`
+- Bump PATCH for fixes and small features
+- Bump MINOR for significant features or breaking changes
+- Bump MAJOR for fundamental architecture changes
+
+Present the suggested version to user for confirmation.
+
+### Step 4: Update Files (TWO-PHASE CONFIRMATION required)
+
+Phase 1 — Present plan:
+- Show current version, new version, and all changes to be documented
+- List files to modify: `Cargo.toml`, `CHANGELOG.md`, optionally `DESIGN.md`
+
+Phase 2 — After user confirms, execute:
+
+1. Update `Cargo.toml` version field
+2. Update `CHANGELOG.md`:
+   - Add new version section at top (after header)
+   - Group changes: Added, Fixed, Changed, Removed
+   - Include date: `## [X.Y.Z] - YYYY-MM-DD`
 3. Update `DESIGN.md` if architecture changed
 4. Commit: `chore: prepare release vX.Y.Z`
-5. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z: summary"`
+5. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z: summary of key changes"`
 6. Push: `git push origin main --tags`
 
 ## Critical Rules
@@ -51,6 +96,7 @@ main ──●──●──●──●──●──●──●──●─
 - Every commit on main must build with zero warnings
 - Run `cargo test` before every merge to main
 - Never force-push to main
+- NEVER run `git config user.name` or `git config user.email`
 
 ## Commit Message Convention
 
@@ -66,3 +112,21 @@ main ──●──●──●──●──●──●──●──●─
 - Bump PATCH for fixes and small features
 - Bump MINOR for significant features or breaking changes
 - Bump MAJOR for fundamental architecture changes
+
+## CHANGELOG Format
+
+```markdown
+## [X.Y.Z] - YYYY-MM-DD
+
+### Added
+- **Feature name** — description
+
+### Fixed
+- **Bug name** — description
+
+### Changed
+- Description of change
+
+### Removed
+- Description of what was removed
+```

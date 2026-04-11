@@ -1,8 +1,8 @@
 #!/usr/bin/bash
 
 # JYC startup script for systemd service.
-# Auto-detects paths from systemd service configuration.
-# Environment variables are sourced from ~/.zshrc.local.
+# Reads JYC_BINARY and JYC_WORKDIR from environment variables.
+# These MUST be set in ~/.zshrc.local or the systemd service EnvironmentFile.
 
 # Source environment variables
 if [ -f ~/.zshrc.local ]; then
@@ -11,15 +11,21 @@ if [ -f ~/.zshrc.local ]; then
   set +a
 fi
 
-# Auto-detect JYC binary and workdir from systemd service
-# These can be overridden via environment variables:
-#   JYC_BINARY - path to jyc binary
-#   JYC_WORKDIR - path to jyc data directory
-JYC_BINARY="${JYC_BINARY:-$(which jyc 2>/dev/null)}"
-JYC_WORKDIR="${JYC_WORKDIR:-$(pwd)}"
+# JYC_BINARY and JYC_WORKDIR must be set in environment
+if [ -z "$JYC_BINARY" ]; then
+  echo "ERROR: JYC_BINARY environment variable not set."
+  echo "Add 'export JYC_BINARY=/path/to/jyc' to ~/.zshrc.local"
+  exit 1
+fi
 
-if [ -z "$JYC_BINARY" ] || [ ! -f "$JYC_BINARY" ]; then
-  echo "ERROR: jyc binary not found. Set JYC_BINARY or ensure jyc is in PATH."
+if [ -z "$JYC_WORKDIR" ]; then
+  echo "ERROR: JYC_WORKDIR environment variable not set."
+  echo "Add 'export JYC_WORKDIR=/path/to/jyc-data' to ~/.zshrc.local"
+  exit 1
+fi
+
+if [ ! -f "$JYC_BINARY" ]; then
+  echo "ERROR: JYC_BINARY not found at: $JYC_BINARY"
   exit 1
 fi
 

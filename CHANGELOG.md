@@ -2,6 +2,23 @@
 
 All notable changes to JYC will be documented in this file.
 
+## [0.1.7] - 2026-04-11
+
+### Added
+
+- **Thread Template** — Initialize threads with predefined files and directories
+  - Pattern-level template configuration (`template = "name"` in config.toml)
+  - Template files copied to thread directory on first message
+  - `/template` command to re-apply template to existing thread
+  - `copy_template_files` shared utility function
+
+- **chat_name prefix matching** — Feishu chat_name pattern now uses prefix match instead of exact match
+
+### Fixed
+
+- Template initialization order bug (template now initialized before .jyc directory check)
+- PR review comments addressed (.unwrap() → .expect(), logged file operation warnings)
+
 ## [0.1.6] - 2026-04-10
 
 ### Added

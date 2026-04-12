@@ -206,7 +206,8 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 12. **Security Module** — Path validation, file size/extension checks for attachments
 13. **Attachment Storage** — Channel-agnostic attachment saving (`core/attachment_storage.rs`). Shared by email and Feishu adapters. Includes path traversal protection at ingestion, unified filename generation, and configurable save paths.
 14. **Alert Service** — Error alert digests + periodic health check reports via email
-15. **Command System** — Email and Feishu `/command` parsing and execution (e.g., `/model` for model switching, `/plan`, `/build`, `/reset`)
+15. **Command System** — Email and Feishu `/command` parsing and execution (e.g., `/model` for model switching, `/plan`, `/build`, `/reset`, `/close`)
+16. **Thread Lifecycle** — Channel-agnostic thread close mechanism via `on_thread_close` callback. Triggers on `/close` command or Feishu `chat.disbanded` events. Deletes thread directory and cleans up in-memory state.
 
 ### Design Principles: Component Responsibilities
 
@@ -654,6 +655,18 @@ pub trait InboundAdapter: ChannelMatcher {
         options: InboundAdapterOptions,
         cancel: CancellationToken,
     ) -> Result<()>;
+}
+
+/// Options passed to an inbound adapter's `start()` method.
+pub struct InboundAdapterOptions {
+    /// Callback for each received message (fire-and-forget)
+    pub on_message: Box<dyn Fn(InboundMessage) -> Result<()> + Send + Sync>,
+    /// Callback for thread close events (e.g., Feishu chat.disbanded)
+    pub on_thread_close: Option<Box<dyn Fn(String) -> Result<()> + Send + Sync>>,
+    /// Callback for errors
+    pub on_error: Box<dyn Fn(anyhow::Error) + Send + Sync>,
+    /// Attachment download configuration
+    pub attachment_config: Option<InboundAttachmentConfig>,
 }
 
 /// Outbound adapter trait — one per channel type.
@@ -2322,7 +2335,9 @@ jyc/
 │   │       ├── registry.rs             # Command parsing + dispatch
 │   │       ├── handler.rs              # CommandHandler trait
 │   │       ├── model_handler.rs        # /model command
-│   │       └── mode_handler.rs         # /plan, /build commands
+│   │       ├── mode_handler.rs         # /plan, /build commands
+│   │       ├── reset_handler.rs        # /reset command
+│   │       ├── close_handler.rs        # /close command (thread cleanup)
 │   ├── services/
 │   │   ├── mod.rs
 │   │   ├── agent.rs                   # AgentService trait (process → AgentResult)

@@ -693,7 +693,7 @@ mod tests {
     fn test_chat_disbanded_event_parsing() {
         let json = r#"{
             "header": {
-                "event_type": "im.chat.disband_v1",
+                "event_type": "im.chat.disbanded_v1",
                 "event_id": "ev_xxx",
                 "create_time": "1704067200000",
                 "app_id": "cli_xxx",
@@ -719,7 +719,7 @@ mod tests {
         }"#;
         
         let envelope: super::EventEnvelope = serde_json::from_str(json).unwrap();
-        assert_eq!(envelope.header.event_type, "im.chat.disband_v1");
+        assert_eq!(envelope.header.event_type, "im.chat.disbanded_v1");
         assert!(envelope.event.chat_disbanded.is_some());
         
         let disband = envelope.event.chat_disbanded.unwrap();

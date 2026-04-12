@@ -86,7 +86,7 @@ pub enum FeishuEvent {
         operator_id: String,
     },
     /// Chat disbanded event (group chat deleted)
-    #[serde(rename = "im.chat.disband_v1")]
+    #[serde(rename = "im.chat.disbanded_v1")]
     ChatDisbanded {
         /// Chat ID
         chat_id: String,
@@ -131,7 +131,7 @@ pub struct EventHeader {
 pub struct EventBody {
     pub sender: EventSender,
     pub message: EventMessage,
-    /// Chat disbanded event data (present when event_type is "im.chat.disband_v1")
+    /// Chat disbanded event data (present when event_type is "im.chat.disbanded_v1")
     #[serde(rename = "chat_disbanded", default)]
     pub chat_disbanded: Option<ChatDisbandedEvent>,
 }
@@ -240,7 +240,7 @@ mod tests {
     #[test]
     fn test_chat_disbanded_event_parsing() {
         let json = r#"{
-            "type": "im.chat.disband_v1",
+            "type": "im.chat.disbanded_v1",
             "chat_id": "oc_12345678",
             "operator_id": "ou_87654321"
         }"#;
@@ -266,7 +266,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("im.chat.disband_v1"));
+        assert!(json.contains("im.chat.disbanded_v1"));
         assert!(json.contains("oc_12345678"));
         assert!(json.contains("ou_87654321"));
     }

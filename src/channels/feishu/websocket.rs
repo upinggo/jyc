@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn test_derive_thread_name_from_chat_id() {
         let thread_name = super::derive_thread_name_from_chat_id("feishu", "oc_12345678");
-        assert_eq!(thread_name, "feishu_chat_oc_12345678");
+        assert_eq!(thread_name, "feishu_oc_12345678");
     }
 
     #[test]
@@ -788,5 +788,5 @@ mod tests {
 /// Derive thread name from chat_id for thread close events.
 /// This matches the logic in FeishuMatcher::derive_thread_name().
 fn derive_thread_name_from_chat_id(channel_name: &str, chat_id: &str) -> String {
-    format!("feishu_chat_{}", chat_id)
+    format!("{}_{}", channel_name, chat_id)
 }

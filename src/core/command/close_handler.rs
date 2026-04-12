@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::handler::{CommandContext, CommandHandler, CommandResult};
 use crate::core::thread_manager::ThreadManager;
+#[allow(unused_imports)]
 use crate::services::static_agent::StaticAgentService;
 
 /// /close command — close and delete thread directory.
@@ -40,22 +41,28 @@ impl CommandHandler for CloseCommandHandler {
         if thread_name.is_empty() {
             return Ok(CommandResult {
                 success: false,
-                message: "Failed to determine thread name".into(),
-                error: Some("Thread path is invalid".into()),
+                message: format!(
+                    "Failed to determine thread name from path: {:?}",
+                    context.thread_path
+                ),
+                error: Some("Thread directory name could not be extracted".into()),
                 requires_restart: false,
             });
         }
 
         match self.thread_manager.close_thread(thread_name).await {
-            Ok(()) => Ok(CommandResult {
-                success: true,
-                message: format!(
-                    "Thread '{}' closed and directory deleted.",
-                    thread_name
-                ),
-                error: None,
-                requires_restart: false,
-            }),
+            Ok(()) => {
+                tracing::info!(thread = %thread_name, "Thread closed successfully via /close command");
+                Ok(CommandResult {
+                    success: true,
+                    message: format!(
+                        "Thread '{}' closed and directory deleted.",
+                        thread_name
+                    ),
+                    error: None,
+                    requires_restart: false,
+                })
+            }
             Err(e) => Ok(CommandResult {
                 success: false,
                 message: format!("Failed to close thread '{}'", thread_name),

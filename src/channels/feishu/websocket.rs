@@ -158,20 +158,36 @@ impl FeishuWebSocket {
         on_message: &(dyn Fn(InboundMessage) -> Result<()> + Send + Sync),
         on_thread_close: Option<&(dyn Fn(String) -> Result<()> + Send + Sync)>,
     ) -> Result<()> {
-        let envelope: EventEnvelope = serde_json::from_slice(data)
+        // First parse as generic JSON to check event type
+        let json: serde_json::Value = serde_json::from_slice(data)
             .context("Failed to parse Feishu event payload as JSON")?;
 
-        // Handle chat disbanded event
-        if envelope.header.event_type == "im.chat.disband_v1" {
-            if let Some(event) = &envelope.event.chat_disbanded {
-                if let Some(callback) = on_thread_close {
-                    let thread_name = derive_thread_name_from_chat_id(channel_name, &event.chat_id);
-                    tracing::info!(chat_id = %event.chat_id, thread = %thread_name, "Chat disbanded, closing thread");
+        let event_type = json.get("header")
+            .and_then(|h| h.get("event_type"))
+            .and_then(|e| e.as_str())
+            .unwrap_or("");
+
+        // Handle chat disbanded event specially
+        if event_type == "im.chat.disband_v1" {
+            if let Some(callback) = on_thread_close {
+                let chat_id = json.get("event")
+                    .and_then(|e| e.get("chat_disbanded"))
+                    .and_then(|c| c.get("chat_id"))
+                    .and_then(|id| id.as_str())
+                    .unwrap_or("");
+                
+                if !chat_id.is_empty() {
+                    let thread_name = derive_thread_name_from_chat_id(channel_name, chat_id);
+                    tracing::info!(chat_id = %chat_id, thread = %thread_name, "Chat disbanded, closing thread");
                     callback(thread_name)?;
                 }
             }
             return Ok(());
         }
+
+        // For other events, use the standard parsing
+        let envelope: EventEnvelope = serde_json::from_slice(data)
+            .context("Failed to parse Feishu event payload as JSON")?;
 
         // Only handle message received events
         if envelope.header.event_type != "im.message.receive_v1" {

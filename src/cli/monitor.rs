@@ -280,7 +280,6 @@ pub async fn run(args: &MonitorArgs, workdir: &Path) -> Result<()> {
                         router,
                         state_manager,
                         cancel_child,
-                        inbound_attachment_config.clone(),
                     );
 
                     if let Err(e) = monitor.start().await {

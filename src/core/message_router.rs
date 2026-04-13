@@ -146,3 +146,133 @@ impl MessageRouter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::channels::types::{
+        ChannelMatcher, ChannelPattern, InboundMessage, MessageContent, PatternMatch, PatternRules,
+    };
+    use std::collections::HashMap;
+
+    /// Mock matcher that always matches with the first pattern
+    struct MockMatcher;
+
+    impl ChannelMatcher for MockMatcher {
+        fn channel_type(&self) -> &str {
+            "mock"
+        }
+
+        fn derive_thread_name(
+            &self,
+            message: &InboundMessage,
+            _patterns: &[ChannelPattern],
+            _pattern_match: Option<&PatternMatch>,
+        ) -> String {
+            // Default: derive from topic
+            message.topic.clone()
+        }
+
+        fn match_message(
+            &self,
+            _message: &InboundMessage,
+            patterns: &[ChannelPattern],
+        ) -> Option<PatternMatch> {
+            patterns.first().map(|p| PatternMatch {
+                pattern_name: p.name.clone(),
+                channel: "mock".to_string(),
+                matches: HashMap::new(),
+            })
+        }
+    }
+
+    fn test_message(topic: &str) -> InboundMessage {
+        InboundMessage {
+            id: "1".to_string(),
+            channel: "test".to_string(),
+            channel_uid: "1".to_string(),
+            sender: "user".to_string(),
+            sender_address: "user@test".to_string(),
+            recipients: vec![],
+            topic: topic.to_string(),
+            content: MessageContent::default(),
+            timestamp: chrono::Utc::now(),
+            thread_refs: None,
+            reply_to_id: None,
+            external_id: None,
+            attachments: vec![],
+            metadata: HashMap::new(),
+            matched_pattern: None,
+        }
+    }
+
+    fn test_pattern(name: &str, thread_name: Option<&str>) -> ChannelPattern {
+        ChannelPattern {
+            name: name.to_string(),
+            thread_name: thread_name.map(|s| s.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_thread_name_override_used_when_set() {
+        let matcher = MockMatcher;
+        let message = test_message("Invoice for food");
+        let patterns = vec![test_pattern("invoices", Some("invoices"))];
+
+        let pattern_match = matcher.match_message(&message, &patterns);
+        assert!(pattern_match.is_some());
+
+        let pattern_name = pattern_match.as_ref().unwrap().pattern_name.clone();
+
+        // With thread_name override, should use "invoices" not "Invoice for food"
+        let thread_name = patterns
+            .iter()
+            .find(|p| p.name == pattern_name)
+            .and_then(|p| p.thread_name.clone())
+            .unwrap_or_else(|| matcher.derive_thread_name(&message, &patterns, pattern_match.as_ref()));
+
+        assert_eq!(thread_name, "invoices");
+    }
+
+    #[test]
+    fn test_thread_name_derived_when_no_override() {
+        let matcher = MockMatcher;
+        let message = test_message("Invoice for food");
+        let patterns = vec![test_pattern("catch_all", None)];
+
+        let pattern_match = matcher.match_message(&message, &patterns);
+        assert!(pattern_match.is_some());
+
+        let pattern_name = pattern_match.as_ref().unwrap().pattern_name.clone();
+
+        // Without thread_name override, should derive from topic
+        let thread_name = patterns
+            .iter()
+            .find(|p| p.name == pattern_name)
+            .and_then(|p| p.thread_name.clone())
+            .unwrap_or_else(|| matcher.derive_thread_name(&message, &patterns, pattern_match.as_ref()));
+
+        assert_eq!(thread_name, "Invoice for food");
+    }
+
+    #[test]
+    fn test_different_topics_same_thread_with_override() {
+        let matcher = MockMatcher;
+        let patterns = vec![test_pattern("invoices", Some("invoices"))];
+
+        for topic in &["Invoice food", "发票 office", "Receipt hotel"] {
+            let message = test_message(topic);
+            let pattern_match = matcher.match_message(&message, &patterns);
+            let pattern_name = pattern_match.as_ref().unwrap().pattern_name.clone();
+
+            let thread_name = patterns
+                .iter()
+                .find(|p| p.name == pattern_name)
+                .and_then(|p| p.thread_name.clone())
+                .unwrap_or_else(|| matcher.derive_thread_name(&message, &patterns, pattern_match.as_ref()));
+
+            assert_eq!(thread_name, "invoices", "Topic '{}' should route to 'invoices'", topic);
+        }
+    }
+}

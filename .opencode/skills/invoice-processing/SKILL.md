@@ -46,14 +46,38 @@ if [ ! -d "$FOLDER" ]; then
 fi
 ```
 
-### Step 2: Download the Invoice
+### Step 2: Identify and Download the Invoice
 
-- **From attachment**: The attachment is already saved in the `attachments/` directory.
-  Copy it to the monthly folder with a temporary name first.
-- **From URL in message**: Download using `bash`:
-  ```bash
-  curl -sL "<url>" -o "invoice_${MONTH}/temp_invoice.pdf"
-  ```
+Invoice emails typically contain:
+- A **download URL** in the email body → this is the actual invoice (PDF)
+- A small **QR code image** as attachment → this is NOT the invoice, IGNORE it
+
+**Priority: always prefer the download URL over attachments.**
+
+1. **Search the email body for download URLs** first:
+   - Look for URLs ending in `.pdf`, `.PDF`
+   - Look for URLs containing keywords: `download`, `invoice`, `fapiao`, `发票`
+   - Look for URLs from known invoice platforms (e.g., `fapiao.com`, `einvoice`, `piaozone`)
+   - These URLs are the actual invoice files
+
+2. **Download from URL**:
+   ```bash
+   curl -sL -o "invoice_${MONTH}/temp_invoice.pdf" "<download_url>"
+   ```
+   Verify the downloaded file is actually a PDF (not HTML error page):
+   ```bash
+   file "invoice_${MONTH}/temp_invoice.pdf"
+   ```
+
+3. **From attachment (only if no download URL found)**:
+   - SKIP small images (< 50KB) — these are QR codes, NOT invoices
+   - Only use PDF attachments or large image attachments (> 100KB)
+   - Copy to monthly folder with a temporary name
+
+**IMPORTANT:**
+- Do NOT use the QR code image as the invoice
+- Do NOT follow or scan the QR code URL
+- The QR code is for the recipient to verify/download manually, not for AI processing
 
 After extraction (Step 3), rename the file using the invoice number:
 ```bash

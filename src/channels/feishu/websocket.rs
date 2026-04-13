@@ -14,7 +14,7 @@ use open_lark::ws_client::{EventDispatcherHandler, LarkWsClient};
 
 use crate::channels::types::{InboundMessage, MessageAttachment, MessageContent};
 use crate::config::types::InboundAttachmentConfig;
-use crate::utils::helpers::{self, sanitize_for_filesystem};
+use crate::utils::helpers::{self};
 
 use super::client::FeishuClient;
 use super::config::FeishuConfig;

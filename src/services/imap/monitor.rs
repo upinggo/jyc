@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-use crate::channels::email::inbound::{self, EmailInboundAdapter, EmailMatcher};
+use crate::channels::email::inbound::{self, EmailMatcher};
 use crate::channels::types::ChannelPattern;
 use crate::config::types::{ImapConfig, InboundAttachmentConfig, MonitorConfig};
 use crate::core::message_router::MessageRouter;
@@ -300,17 +300,10 @@ impl ImapMonitor {
             "Message received"
         );
 
-        // Save attachments to thread directory if any
-        if !message.attachments.is_empty() {
-            let adapter = EmailInboundAdapter::new(self.channel_name.clone());
-            if let Err(e) = adapter.save_attachments_to_thread_directory(
-                &mut message,
-                &self.patterns,
-                self.inbound_attachment_config.as_ref(),
-            ).await {
-                tracing::warn!("Failed to save email attachments: {}", e);
-            }
-        }
+        // Note: Attachments are saved later by the thread manager after
+        // pattern matching determines the correct thread name.
+        // This ensures attachments go to the right directory when
+        // thread_name override is configured on the pattern.
 
         // Route through the message router (pattern match → thread queue)
         self.router.route(&EmailMatcher, message, &self.patterns).await;

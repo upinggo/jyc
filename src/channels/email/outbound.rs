@@ -122,7 +122,10 @@ impl OutboundAdapter for EmailOutboundAdapter {
     }
 
     fn clean_body(&self, raw_body: &str) -> String {
-        email_parser::strip_quoted_history(raw_body)
+        // Don't strip quoted history — forwarded emails have their content
+        // in the "quoted" section. The chat history log is the source of truth
+        // for conversation context, not email quoting.
+        raw_body.trim().to_string()
     }
 
     /// Send a reply to an inbound message.

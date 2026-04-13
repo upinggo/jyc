@@ -705,6 +705,23 @@ async fn process_message(
         "Message stored"
     );
 
+    // ── 1.5. SAVE ATTACHMENTS ─────────────────────────────────────────
+    // Save attachments AFTER thread name resolution (not before).
+    // This ensures attachments go to the correct thread directory when
+    // thread_name override is configured on the pattern.
+    if !message.attachments.is_empty() {
+        let _attachments_dir = store_result.thread_path.join("attachments");
+        if let Err(e) = crate::core::attachment_storage::save_attachments_to_thread_directory(
+            &mut message.clone(),
+            &storage.workspace(),
+            &message.channel,
+            thread_name,
+            item.attachment_config.as_ref(),
+        ).await {
+            tracing::warn!(error = %e, "Failed to save attachments");
+        }
+    }
+
     // ── 2. COMMAND PROCESS ────────────────────────────────────────────
     let raw_body = message
         .content

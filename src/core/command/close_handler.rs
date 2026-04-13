@@ -2,7 +2,6 @@ use anyhow::Result;
 #[allow(unused_imports)]
 use anyhow::Context;
 use async_trait::async_trait;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::handler::{CommandContext, CommandHandler, CommandResult};
@@ -76,6 +75,7 @@ impl CommandHandler for CloseCommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn test_config() -> Arc<crate::config::types::AppConfig> {

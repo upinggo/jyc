@@ -4,7 +4,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::channels::email::inbound::{self, EmailMatcher};
 use crate::channels::types::ChannelPattern;
-use crate::config::types::{ImapConfig, InboundAttachmentConfig, MonitorConfig};
+use crate::config::types::{ImapConfig, MonitorConfig};
 use crate::core::message_router::MessageRouter;
 use crate::core::state_manager::StateManager;
 use crate::services::imap::client::ImapClient;
@@ -24,7 +24,6 @@ pub struct ImapMonitor {
     router: Arc<MessageRouter>,
     state_manager: StateManager,
     cancel: CancellationToken,
-    inbound_attachment_config: Option<InboundAttachmentConfig>,
 }
 
 impl ImapMonitor {
@@ -36,7 +35,6 @@ impl ImapMonitor {
         router: Arc<MessageRouter>,
         state_manager: StateManager,
         cancel: CancellationToken,
-        inbound_attachment_config: Option<InboundAttachmentConfig>,
     ) -> Self {
         Self {
             channel_name,
@@ -46,7 +44,6 @@ impl ImapMonitor {
             router,
             state_manager,
             cancel,
-            inbound_attachment_config,
         }
     }
 

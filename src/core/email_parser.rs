@@ -892,45 +892,26 @@ pub fn build_footer(model: Option<&str>, mode: Option<&str>, input_tokens: Optio
 /// ```
 pub async fn build_full_reply_text(
     reply_text: &str,
-    thread_path: &std::path::Path,
-    sender: &str,
-    timestamp: &str,
-    topic: &str,
-    body_text: &str,
-    message_dir: &str,
+    _thread_path: &std::path::Path,
+    _sender: &str,
+    _timestamp: &str,
+    _topic: &str,
+    _body_text: &str,
+    _message_dir: &str,
     model: Option<&str>,
     mode: Option<&str>,
     input_tokens: Option<u64>,
     max_tokens: Option<u64>,
 ) -> String {
-    let current_message = TrailCurrentMessage {
-        sender: sender.to_string(),
-        timestamp: timestamp.to_string(),
-        topic: topic.to_string(),
-        body_text: body_text.to_string(),
-    };
-
-    let quoted_history = prepare_body_for_quoting(
-        thread_path,
-        current_message,
-        None,
-        Some(message_dir),
-    )
-    .await;
-
     let footer = build_footer(model, mode, input_tokens, max_tokens);
     
     // Clean reply text to remove any trailing `---` separators
     let clean_reply = strip_trailing_separators(reply_text);
 
-    if quoted_history.is_empty() && footer.is_empty() {
+    if footer.is_empty() {
         clean_reply
-    } else if quoted_history.is_empty() {
-        format!("{}\n\n{}", clean_reply, footer)
-    } else if footer.is_empty() {
-        format!("{}\n\n{}", clean_reply, quoted_history)
     } else {
-        format!("{}\n\n{}\n\n{}", clean_reply, footer, quoted_history)
+        format!("{}\n\n{}", clean_reply, footer)
     }
 }
 

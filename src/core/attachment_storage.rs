@@ -66,11 +66,11 @@ pub fn generate_attachment_filename(attachment: &MessageAttachment) -> String {
         (safe_name, None)
     };
 
-    // Limit name length
-    let truncated_name = if name_no_ext.len() > 50 {
-        &name_no_ext[..50]
+    // Limit name length (use char boundary to handle multi-byte UTF-8 characters)
+    let truncated_name: String = if name_no_ext.len() > 50 {
+        name_no_ext.chars().take(50).collect()
     } else {
-        &name_no_ext
+        name_no_ext.to_string()
     };
 
     // Build final filename
@@ -326,6 +326,42 @@ mod tests {
         assert!(name.ends_with(".txt"));
         // 15 (timestamp) + 1 (_) + 8 (uuid) + 1 (_) + 50 (truncated) + 4 (.txt) = 79
         assert!(name.len() <= 80);
+    }
+
+    #[test]
+    fn test_generate_attachment_filename_chinese_characters() {
+        // Chinese chars are 3 bytes in UTF-8, ensure we truncate at char boundary
+        let chinese_name = "儒德管理咨询(上海)有限公司_发票文件.pdf";
+        let attachment = MessageAttachment {
+            filename: chinese_name.to_string(),
+            content_type: "application/pdf".to_string(),
+            size: 1000,
+            content: None,
+            saved_path: None,
+        };
+        let name = generate_attachment_filename(&attachment);
+        assert!(name.ends_with(".pdf"));
+        // Should not panic - this was the bug
+        assert!(name.len() > 0);
+    }
+
+    #[test]
+    fn test_generate_attachment_filename_chinese_long_name() {
+        // Very long Chinese name - more than 50 characters
+        let chinese_name = "儒德管理咨询(上海)有限公司_发票文件_很长很长的名字_测试用.pdf";
+        let attachment = MessageAttachment {
+            filename: chinese_name.to_string(),
+            content_type: "application/pdf".to_string(),
+            size: 1000,
+            content: None,
+            saved_path: None,
+        };
+        let name = generate_attachment_filename(&attachment);
+        assert!(name.ends_with(".pdf"));
+        // Should truncate at 50 chars without panicking
+        // Chinese chars are 3 bytes each, so 50 chars = up to 150 bytes
+        // timestamp(15) + _(1) + uuid(8) + _(1) + 150 (max chars) + .pdf(4) = 179
+        assert!(name.len() <= 180);
     }
 
     #[tokio::test]

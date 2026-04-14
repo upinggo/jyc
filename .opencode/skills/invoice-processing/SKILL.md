@@ -68,12 +68,26 @@ Invoice emails typically contain:
 
 2. **Download from URL**:
    ```bash
-   curl -sL -o "invoice_${MONTH}/temp_invoice.pdf" "<download_url>"
+   curl -sL -o "invoice_${MONTH}/temp_invoice" "<download_url>"
    ```
-   Verify the downloaded file is actually a PDF (not HTML error page):
+   Verify the downloaded file type:
    ```bash
-   file "invoice_${MONTH}/temp_invoice.pdf"
+   file "invoice_${MONTH}/temp_invoice"
    ```
+
+   **Two-level download handling:**
+   - If the downloaded file is HTML (not PDF/image), it's a redirect/intermediate page
+   - Extract the actual invoice URL from the HTML:
+     ```bash
+     # Look for PDF/image links in the HTML
+     grep -oE 'href="[^"]*\.(pdf|PDF|jpg|JPG|png|PNG)[^"]*"' "invoice_${MONTH}/temp_invoice" | head -1
+     ```
+   - If found, download the real invoice:
+     ```bash
+     curl -sL -o "invoice_${MONTH}/temp_invoice" "<extracted_url>"
+     file "invoice_${MONTH}/temp_invoice"
+     ```
+   - Determine final extension from file type
 
 3. **From attachment (only if no download URL found)**:
    - SKIP small images (< 50KB) — these are QR codes, NOT invoices

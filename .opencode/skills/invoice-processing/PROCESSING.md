@@ -174,10 +174,18 @@ Do NOT skip this URL. Do NOT tell the user it needs login. Just download it.
 - ❌ WRONG: `https://ei.51fapiao.cn/...` — this is the CDN for images/JS, NOT an invoice
 - The correct URL always starts with `dlj.51fapiao.cn/dlj/`
 
-**⚠️ You MUST use the download proxy for 51fapiao, NOT `curl`.**
-51fapiao uses Alibaba Cloud WAF which blocks requests from non-mainland China IPs.
-`curl` from the server gets a 405 WAF block page.
-Use the bundled `proxy_download.py` which routes through a Shanghai proxy server.
+**⚠️ Use `proxy_download.py` for 51fapiao downloads, NOT `curl`.**
+51fapiao uses Alibaba Cloud WAF which may block overseas server IPs.
+The bundled `proxy_download.py` script handles this automatically:
+- On mainland China servers: downloads directly (no proxy needed)
+- On overseas servers (HK, etc.): auto-falls back to proxy if configured
+
+**Proxy configuration (only needed for overseas servers):**
+```bash
+export INVOICE_DOWNLOAD_PROXY=http://150.158.50.252:8765
+```
+If not set, only direct download is attempted. On mainland China servers
+this works fine. On overseas servers, set this env var to enable proxy fallback.
 
 When you find a URL matching `dlj.51fapiao.cn/dlj/v7/...`:
 

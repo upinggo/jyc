@@ -43,15 +43,66 @@ These utilities are used by both PDF Phase and Image Phase.
 
 ### URL Extraction from Email Body
 
-Search the email body for invoice download URLs. This function is called once
-and the results are used by both phases.
+**⚠️ CRITICAL: The incoming message may be truncated — forwarded email content
+is often stripped. You MUST search the chat history file for the FULL email body.**
+
+The invoice download URL is often in the **forwarded** part of the email, which
+may not appear in the incoming message prompt. To find it:
+
+**⚠️ IMPORTANT: Only search the LATEST received message, not the entire chat
+history. The chat history contains multiple emails — you must only process
+the current one.**
 
 ```bash
-# Look for URLs in the email body:
-# - URLs ending in .pdf, .PDF, .jpg, .png
-# - URLs containing keywords: download, invoice, fapiao, 发票
-# - URLs from known platforms: fapiao.com, einvoice, piaozone
+# Extract the LAST received message from today's chat history
+# (everything between the last "type:received" marker and the next "---")
+# Then search that block for invoice platform URLs
+
+# Step 1: Find the last received message block and search for URLs
+python3 << 'PYEOF'
+import re, glob
+
+# Find today's chat history file
+files = sorted(glob.glob("chat_history_*.md"))
+if not files:
+    print("NO_CHAT_HISTORY")
+    exit(0)
+
+content = open(files[-1], encoding="utf-8").read()
+
+# Split by --- separator and find the last "type:received" block
+blocks = content.split("\n---\n")
+last_received = None
+for block in reversed(blocks):
+    if "type:received" in block:
+        last_received = block
+        break
+
+if not last_received:
+    print("NO_RECEIVED_MESSAGE")
+    exit(0)
+
+# Extract all URLs from the last received message
+urls = re.findall(r'https?://[^\s<>"\')\]]+', last_received)
+for url in urls:
+    # Filter for known invoice platforms and download links
+    lower = url.lower()
+    if any(kw in lower for kw in ['51fapiao', 'maycur', 'fapiao', 'download', 'invoice', 'dlj.']):
+        print(f"INVOICE_URL: {url}")
+    elif url.lower().endswith(('.pdf', '.jpg', '.png')):
+        print(f"FILE_URL: {url}")
+PYEOF
 ```
+
+**Do NOT rely only on the incoming message text.** The URL is usually in the
+forwarded/quoted portion which is stripped from the prompt. ALWAYS run the
+script above to find invoice URLs from the **latest** received message in
+`chat_history_*.md`.
+
+Also look for:
+- URLs ending in .pdf, .PDF, .jpg, .png
+- URLs containing keywords: download, invoice, fapiao, 发票
+- URLs from known platforms: 51fapiao.cn, maycur.com, einvoice, piaozone
 
 ### Download and Classify
 

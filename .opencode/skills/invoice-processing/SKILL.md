@@ -54,13 +54,24 @@ fi
 
 ### Step 2: Identify and Download the Invoice
 
-Invoice emails typically contain:
-- A **download URL** in the email body → this is the actual invoice (PDF)
-- A small **QR code image** as attachment → this is NOT the invoice, IGNORE it
+**IMPORTANT: ALWAYS check the attachments directory first.**
 
-**Priority: always prefer the download URL over attachments.**
+Attachments from the email are automatically saved by the system to the
+`attachments/` subdirectory in the thread workspace. Check there before
+looking at the email body for download URLs.
 
-1. **Search the email body for download URLs** first:
+**Priority order:**
+
+1. **Check saved attachments first**:
+   ```bash
+   ls -la attachments/
+   ```
+   - Look for PDF files (`.pdf`) or large image files (`.jpg`, `.png`)
+   - SKIP small images (< 50KB) — these are QR codes, NOT invoices
+   - If a valid invoice file is found, copy it to the monthly folder and
+     proceed to Step 3
+
+2. **If no usable attachment found, search the email body for download URLs**:
    - Look for URLs ending in `.pdf`, `.PDF`
    - Look for URLs containing keywords: `download`, `invoice`, `fapiao`, `发票`
    - Look for URLs from known invoice platforms (e.g., `fapiao.com`, `einvoice`, `piaozone`)
@@ -103,11 +114,6 @@ Invoice emails typically contain:
      ```
    - The switch between parsers is automatic — no user interaction
    - Determine final extension from file type
-
-3. **From attachment (only if no download URL found)**:
-   - SKIP small images (< 50KB) — these are QR codes, NOT invoices
-   - Only use PDF attachments or large image attachments (> 100KB)
-   - Copy to monthly folder with a temporary name
 
 **IMPORTANT:**
 - Do NOT use the QR code image as the invoice

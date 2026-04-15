@@ -298,60 +298,12 @@ impl GithubInboundAdapter {
             "GitHub poll cycle started"
         );
 
-        // 1. Fetch open issues/PRs updated since last poll
-        let issues = client.list_issues_since(&poll_start).await?;
-        tracing::debug!(
-            channel = %self.channel_name,
-            count = issues.len(),
-            "Fetched open issues/PRs"
-        );
+        // Track which issue numbers had comments routed in this cycle.
+        // If a comment was routed for an issue, skip the issue_updated event
+        // to avoid duplicate triggers in the same poll cycle.
+        let mut commented_issues: HashSet<u64> = HashSet::new();
 
-        for issue in &issues {
-            let github_type = if issue.is_pull_request() { "pull_request" } else { "issue" };
-            let labels: Vec<String> = issue.labels.iter().map(|l| l.name.clone()).collect();
-
-            // Cache issue info for comment routing
-            issue_cache.insert(
-                issue.number,
-                (issue.title.clone(), github_type.to_string(), labels.clone()),
-            );
-
-            let event_uid = format!("{}-{}-updated-{}", github_type, issue.number, issue.updated_at);
-
-            if processed_events.contains(&event_uid) {
-                continue;
-            }
-
-            tracing::info!(
-                channel = %self.channel_name,
-                event = "issue_updated",
-                number = issue.number,
-                title = %issue.title,
-                github_type = github_type,
-                user = %issue.user.login,
-                labels = ?labels,
-                "GitHub event detected → routing to thread"
-            );
-
-            // Route: build trigger message and send to on_message
-            let message = self.build_trigger_message(
-                "issue_updated",
-                issue.number,
-                &issue.title,
-                github_type,
-                "updated",
-                &issue.user.login,
-                &labels,
-                &event_uid,
-            );
-            if let Err(e) = (options.on_message)(message) {
-                tracing::error!(error = %e, number = issue.number, "Failed to route issue event");
-            }
-
-            processed_events.insert(event_uid);
-        }
-
-        // 2. Fetch comments since last poll
+        // 1. Fetch comments FIRST (they are more specific triggers than issue_updated)
         let comments = client.list_comments_since(&poll_start).await?;
         tracing::debug!(
             channel = %self.channel_name,
@@ -417,6 +369,79 @@ impl GithubInboundAdapter {
             );
             if let Err(e) = (options.on_message)(message) {
                 tracing::error!(error = %e, number = issue_number, "Failed to route comment event");
+            }
+
+            commented_issues.insert(issue_number);
+            processed_events.insert(event_uid);
+        }
+
+        // 2. Fetch open issues/PRs updated since last poll.
+        // ONLY route genuinely NEW issues (created_at within poll window).
+        // Do NOT route issue_updated — it fires every time the bot comments,
+        // causing infinite loops. Existing issues are triggered by comments only.
+        let issues = client.list_issues_since(&poll_start).await?;
+        tracing::debug!(
+            channel = %self.channel_name,
+            count = issues.len(),
+            "Fetched open issues/PRs"
+        );
+
+        for issue in &issues {
+            let github_type = if issue.is_pull_request() { "pull_request" } else { "issue" };
+            let labels: Vec<String> = issue.labels.iter().map(|l| l.name.clone()).collect();
+
+            // Always update cache regardless of routing
+            issue_cache.insert(
+                issue.number,
+                (issue.title.clone(), github_type.to_string(), labels.clone()),
+            );
+
+            // Only route if this issue was CREATED within the poll window.
+            // Compare created_at with poll_start to detect genuinely new issues.
+            // Issues updated (but not created) within the window are NOT routed
+            // here — they are triggered by comments or label changes.
+            let is_newly_created = issue.created_at > poll_start;
+
+            if !is_newly_created {
+                continue;
+            }
+
+            let event_uid = format!("{}-{}-opened", github_type, issue.number);
+
+            if processed_events.contains(&event_uid) {
+                continue;
+            }
+
+            // Skip if a comment was already routed for this issue in this cycle
+            if commented_issues.contains(&issue.number) {
+                processed_events.insert(event_uid);
+                continue;
+            }
+
+            tracing::info!(
+                channel = %self.channel_name,
+                event = "opened",
+                number = issue.number,
+                title = %issue.title,
+                github_type = github_type,
+                user = %issue.user.login,
+                labels = ?labels,
+                "New issue/PR detected → routing to thread"
+            );
+
+            // Route: build trigger message and send to on_message
+            let message = self.build_trigger_message(
+                &format!("{}_opened", github_type),
+                issue.number,
+                &issue.title,
+                github_type,
+                "opened",
+                &issue.user.login,
+                &labels,
+                &event_uid,
+            );
+            if let Err(e) = (options.on_message)(message) {
+                tracing::error!(error = %e, number = issue.number, "Failed to route new issue event");
             }
 
             processed_events.insert(event_uid);

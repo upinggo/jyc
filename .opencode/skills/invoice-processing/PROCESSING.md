@@ -54,10 +54,17 @@ and the results are used by both phases.
 
 ### Download and Classify
 
-Download a URL and determine the file type:
+Download a URL and determine the file type.
+
+**⚠️ ALWAYS use browser-like headers when downloading invoice URLs.**
+Many invoice platforms (e.g., 51fapiao) return 405/403 errors or different
+content when requests lack a `User-Agent` header. Always include one:
 
 ```bash
-curl -sL -o "invoice_${MONTH}/temp_download" "<url>"
+curl -sL \
+    -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+    -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8" \
+    -o "invoice_${MONTH}/temp_download" "<url>"
 
 file_type=$(file --brief --mime-type "invoice_${MONTH}/temp_download")
 case "$file_type" in
@@ -68,13 +75,29 @@ case "$file_type" in
         echo "image"
         ;;
     text/html|application/xhtml+xml)
-        echo "html"
+        # Check if it's an error page (small HTML, contains error codes)
+        file_size=$(wc -c < "invoice_${MONTH}/temp_download")
+        if [ "$file_size" -lt 5000 ]; then
+            # Likely an error page (405, 403, etc.) — check content
+            if grep -qi "error\|40[0-9]\|not found\|forbidden\|expired" "invoice_${MONTH}/temp_download"; then
+                echo "error_page"
+            else
+                echo "html"
+            fi
+        else
+            echo "html"
+        fi
         ;;
     *)
         echo "unknown"
         ;;
 esac
 ```
+
+**If `file_type` is `error_page`:**
+- Log as `download_failed` with the HTTP error details
+- Do NOT attempt HTML extraction on error pages — they contain no download URL
+- Try next URL
 
 ### Two-Level HTML Extraction
 
@@ -126,14 +149,19 @@ NEVER assume an invoice URL requires login — always try to download first.**
 **51fapiao does NOT require login.** The URL contains the full access hash.
 Do NOT skip this URL. Do NOT tell the user it needs login. Just download it.
 
+**⚠️ You MUST use browser headers for 51fapiao.** Without `User-Agent`, the server
+returns a 405 error page instead of the invoice viewer HTML.
+
 When you see a URL like `https://dlj.51fapiao.cn/dlj/v7/...` in the email body:
 
-1. **Download returns HTML** (not PDF) when using browser-like headers:
+1. **Download with browser headers** (MANDATORY — plain `curl` gets 405 error):
    ```bash
-   curl -sL -H "User-Agent: Mozilla/5.0" \
+   curl -sL \
+       -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+       -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8" \
        -o "invoice_${MONTH}/temp_download" "https://dlj.51fapiao.cn/dlj/v7/<hash>"
    file --brief --mime-type "invoice_${MONTH}/temp_download"
-   # → text/html (NOT application/pdf)
+   # → text/html (the invoice viewer page, NOT a 405 error)
    ```
 
 2. **Run html_parser.py** — it extracts the PDF download URL from hidden inputs:

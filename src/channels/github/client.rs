@@ -38,6 +38,7 @@ pub struct GithubIssue {
     pub labels: Vec<GithubLabel>,
     /// Present only for pull requests
     pub pull_request: Option<GithubPullRequestRef>,
+    pub created_at: String,
     pub updated_at: String,
     pub closed_at: Option<String>,
 }
@@ -278,6 +279,7 @@ mod tests {
             user: GithubUser { login: "test".to_string() },
             labels: vec![],
             pull_request: None,
+            created_at: "2026-04-15T10:00:00Z".to_string(),
             updated_at: "2026-04-15T10:00:00Z".to_string(),
             closed_at: None,
         };

@@ -174,19 +174,20 @@ Do NOT skip this URL. Do NOT tell the user it needs login. Just download it.
 - ❌ WRONG: `https://ei.51fapiao.cn/...` — this is the CDN for images/JS, NOT an invoice
 - The correct URL always starts with `dlj.51fapiao.cn/dlj/`
 
-**⚠️ You MUST use browser headers for 51fapiao.** Without `User-Agent`, the server
-returns a 405 error page instead of the invoice viewer HTML.
+**⚠️ You MUST use the download proxy for 51fapiao, NOT `curl`.**
+51fapiao uses Alibaba Cloud WAF which blocks requests from non-mainland China IPs.
+`curl` from the server gets a 405 WAF block page.
+Use the bundled `proxy_download.py` which routes through a Shanghai proxy server.
 
 When you find a URL matching `dlj.51fapiao.cn/dlj/v7/...`:
 
-1. **Download with browser headers** (MANDATORY — plain `curl` gets 405 error):
+1. **Download the viewer HTML via Shanghai proxy** (MANDATORY):
    ```bash
-   curl -sL \
-       -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-       -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8" \
-       -o "invoice_${MONTH}/temp_download" "<THE_dlj.51fapiao.cn_URL>"
-   file --brief --mime-type "invoice_${MONTH}/temp_download"
-   # → text/html (the invoice viewer page, NOT a 405 error)
+   MONTH=$(date +%Y-%m)
+   python3 .opencode/skills/invoice-processing/scripts/proxy_download.py \
+       "<THE_dlj.51fapiao.cn_URL>" \
+       "invoice_${MONTH}/temp_download"
+   # → {"success": true, "file": "invoice_.../temp_download", "size": 8790, "content_type": "..."}
    ```
 
 2. **Run html_parser.py** — it extracts the PDF download URL from hidden inputs:
@@ -195,16 +196,16 @@ When you find a URL matching `dlj.51fapiao.cn/dlj/v7/...`:
        "invoice_${MONTH}/temp_download" "<THE_dlj.51fapiao.cn_URL>")
    # → {"success": true, "pdf_url": "https://dlj.51fapiao.cn/dlj/v7/downloadFile/<hash>?signatureString=<sig>"}
    ```
-   **If html_parser.py fails:** check that you used the correct `dlj.51fapiao.cn` URL
-   (not `www.51fapiao.cn`), and that you included browser headers in the curl command.
-   Do NOT fall back to playwright — fix the URL and retry.
+   **If html_parser.py fails:** check that proxy_download.py succeeded (size > 5000 bytes).
+   A small file (< 3000 bytes) is likely an error page. Do NOT fall back to playwright.
 
-3. **Download the real PDF** using the extracted URL:
+3. **Download the real PDF** via Shanghai proxy:
    ```bash
    pdf_url=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin)['pdf_url'])")
-   curl -sL -o "invoice_${MONTH}/temp_download" "$pdf_url"
-   file --brief --mime-type "invoice_${MONTH}/temp_download"
-   # → application/pdf ✅
+   python3 .opencode/skills/invoice-processing/scripts/proxy_download.py \
+       "$pdf_url" \
+       "invoice_${MONTH}/temp_download"
+   # → {"success": true, "size": 50972, "content_type": "application/pdf"}
    ```
 
 4. **Extract data** from the PDF using Python PdfReader (Step 3a)
@@ -323,17 +324,17 @@ For each URL (up to 5):
 
    **If URL contains `dlj.51fapiao.cn` → Use 51fapiao method directly:**
    ```bash
-   # Step 1: Download the viewer HTML with browser headers (MANDATORY)
-   curl -sL \
-       -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-       -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8" \
-       -o "invoice_${MONTH}/temp_download" "<THE_dlj.51fapiao.cn_URL>"
+   MONTH=$(date +%Y-%m)
+   # Step 1: Download the viewer HTML via Shanghai proxy
+   python3 .opencode/skills/invoice-processing/scripts/proxy_download.py \
+       "<THE_dlj.51fapiao.cn_URL>" "invoice_${MONTH}/temp_download"
    # Step 2: Run html_parser.py to extract the real PDF download URL
    result=$(python3 .opencode/skills/invoice-processing/scripts/html_parser.py \
        "invoice_${MONTH}/temp_download" "<THE_dlj.51fapiao.cn_URL>")
-   # Step 3: Download the real PDF
+   # Step 3: Download the real PDF via Shanghai proxy
    pdf_url=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin)['pdf_url'])")
-   curl -sL -o "invoice_${MONTH}/temp_download" "$pdf_url"
+   python3 .opencode/skills/invoice-processing/scripts/proxy_download.py \
+       "$pdf_url" "invoice_${MONTH}/temp_download"
    # Step 4: Verify it's a PDF, then extract with PdfReader
    ```
    - The URL MUST start with `dlj.51fapiao.cn` — ignore `www.51fapiao.cn` or `ei.51fapiao.cn`

@@ -1,21 +1,25 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::channels::types::{OutboundAdapter, OutboundAttachment, SendResult};
 use crate::core::message_storage::MessageStorage;
+use super::client::GithubClient;
 use super::config::GithubConfig;
 
 /// GitHub outbound adapter — posts comments on issues/PRs.
 pub struct GithubOutboundAdapter {
     config: GithubConfig,
     storage: Arc<MessageStorage>,
+    client: GithubClient,
 }
 
 impl GithubOutboundAdapter {
-    pub fn new(config: GithubConfig, storage: Arc<MessageStorage>) -> Self {
-        Self { config, storage }
+    pub fn new(config: GithubConfig, storage: Arc<MessageStorage>) -> Result<Self> {
+        let client = GithubClient::new(&config)
+            .context("Failed to create GitHub client for outbound")?;
+        Ok(Self { config, storage, client })
     }
 }
 
@@ -29,7 +33,7 @@ impl OutboundAdapter for GithubOutboundAdapter {
         tracing::info!(
             owner = %self.config.owner,
             repo = %self.config.repo,
-            "GitHub outbound adapter connected (stub)"
+            "GitHub outbound adapter connected"
         );
         Ok(())
     }
@@ -57,10 +61,30 @@ impl OutboundAdapter for GithubOutboundAdapter {
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
+        // Get role from metadata (set by message_router from pattern config)
+        let role = original
+            .metadata
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // Build comment body with role prefix
+        let comment_body = if role.is_empty() {
+            reply_text.to_string()
+        } else {
+            format!("[{}] {}", role, reply_text)
+        };
+
+        // Post comment via GitHub API
+        let comment_id = self.client.create_comment(number, &comment_body).await
+            .with_context(|| format!("Failed to post comment on #{}", number))?;
+
         tracing::info!(
-            number = %number,
-            reply_len = %reply_text.len(),
-            "GitHub outbound: would post comment (stub — not implemented yet)"
+            number = number,
+            comment_id = comment_id,
+            role = role,
+            reply_len = reply_text.len(),
+            "GitHub comment posted"
         );
 
         // Store reply to chat log
@@ -69,7 +93,7 @@ impl OutboundAdapter for GithubOutboundAdapter {
             .await?;
 
         Ok(SendResult {
-            message_id: format!("github-stub-{}", uuid::Uuid::new_v4()),
+            message_id: format!("github-comment-{}", comment_id),
         })
     }
 
@@ -81,7 +105,7 @@ impl OutboundAdapter for GithubOutboundAdapter {
     ) -> Result<SendResult> {
         tracing::debug!("GitHub send_alert: not implemented");
         Ok(SendResult {
-            message_id: "github-alert-stub".to_string(),
+            message_id: "github-alert-noop".to_string(),
         })
     }
 

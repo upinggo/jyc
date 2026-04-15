@@ -138,7 +138,7 @@ pub async fn run(args: &MonitorArgs, workdir: &Path) -> Result<()> {
                 Arc::new(GithubOutboundAdapter::new(
                     github_config,
                     storage.clone(),
-                ))
+                )?)
             }
             other => {
                 tracing::warn!(

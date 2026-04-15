@@ -213,6 +213,43 @@ impl GithubClient {
             .await
             .context("Failed to parse closed issues response")
     }
+
+    /// Post a comment on an issue or PR.
+    ///
+    /// GitHub API uses the /issues/ endpoint for both issue and PR comments.
+    /// Returns the comment ID.
+    pub async fn create_comment(&self, number: u64, body: &str) -> Result<u64> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues/{}/comments",
+            self.owner, self.repo, number
+        );
+
+        let resp = self
+            .client
+            .post(&url)
+            .json(&serde_json::json!({ "body": body }))
+            .send()
+            .await
+            .context("Failed to post comment")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("POST comment failed: {} — {}", status, &body[..body.len().min(200)]);
+        }
+
+        #[derive(Deserialize)]
+        struct CommentResponse {
+            id: u64,
+        }
+
+        let comment: CommentResponse = resp
+            .json()
+            .await
+            .context("Failed to parse comment response")?;
+
+        Ok(comment.id)
+    }
 }
 
 #[cfg(test)]

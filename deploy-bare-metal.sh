@@ -102,10 +102,10 @@ fi
 mkdir -p "$HOME/.local/bin"
 ln -sf "$JYC_REPO_DIR/target/release/jyc" "$HOME/.local/bin/jyc"
 
-echo "=== Creating systemd user service ==="
+echo "=== Preparing systemd user service ==="
 mkdir -p "$HOME/.config/systemd/user"
 
-mkdir -p "$WORKDIR"
+WORKDIR="$(cd "$WORKDIR" 2>/dev/null && pwd || mkdir -p "$WORKDIR" && cd "$WORKDIR" && pwd)"
 
 cat > "$HOME/.config/systemd/user/jyc.service" << EOF
 [Unit]
@@ -116,7 +116,7 @@ Type=simple
 Environment="HOME=%h"
 Environment="JYC_WORKDIR=$WORKDIR"
 EnvironmentFile=%h/.zshrc.local
-ExecStart=%h/.local/bin/jyc
+ExecStart=$JYC_REPO_DIR/run-jyc.sh
 WorkingDirectory=$WORKDIR
 
 [Install]
@@ -126,34 +126,19 @@ EOF
 # Enable lingering so systemd --user runs without an active login session
 sudo loginctl enable-linger "$(whoami)" 2>/dev/null || true
 
-# Ensure XDG_RUNTIME_DIR is set (required for systemctl --user)
-if [[ -z "$XDG_RUNTIME_DIR" ]]; then
-    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-fi
-
-if systemctl --user daemon-reload 2>/dev/null; then
-    systemctl --user enable jyc.service
-    systemctl --user start jyc.service
-    echo "=== Deployment complete ==="
-    echo "jyc service started successfully."
-else
-    echo "=== Deployment complete (manual service start required) ==="
-    echo ""
-    echo "systemctl --user is not available in this session."
-    echo "To start jyc, log out and back in, then run:"
-    echo "  systemctl --user daemon-reload"
-    echo "  systemctl --user enable --now jyc.service"
-fi
-
 echo ""
+echo "=== Provisioning complete ==="
 echo "Dotfiles: $DOTFILES"
 echo "Workdir: $WORKDIR"
 echo ""
-echo "Please configure your environment:"
-echo "  - Edit ~/.zshrc.local and add:"
-echo "    export ARK_API_KEY=your_api_key"
-echo "    export JYC_BINARY=$HOME/.local/bin/jyc"
-echo "    export JYC_WORKDIR=$WORKDIR"
+echo "Next steps:"
+echo "  1. Edit ~/.zshrc.local and add:"
+echo "     export ARK_API_KEY=your_api_key"
+echo "     export JYC_BINARY=$HOME/.local/bin/jyc"
+echo "     export JYC_WORKDIR=$WORKDIR"
 echo ""
-echo "Restart the service:"
-echo "  systemctl --user restart jyc"
+echo "  2. Start jyc:"
+echo "     $JYC_REPO_DIR/deploy.sh"
+echo ""
+echo "  3. Manage the service:"
+echo "     $JYC_REPO_DIR/jyc-ctl.sh {status|logs|restart|stop|start}"

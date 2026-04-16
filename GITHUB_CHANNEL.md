@@ -116,16 +116,22 @@ InboundMessage {
 
 | Event | Condition | Thread | Action |
 |-------|-----------|--------|--------|
-| issue.opened | — | `issue-{N}` | Create thread, trigger agent |
-| issue.commented | Not bot | `issue-{N}` | Trigger agent |
-| issue.labeled | Label matches pattern | `issue-{N}` | Trigger agent |
+| issue.opened | Labels match pattern | `issue-{N}` | Create thread, trigger agent |
+| issue.commented | Not self-loop | `issue-{N}` | Trigger agent |
+| issue.labeled | New labels match pattern | `issue-{N}` | Trigger agent (re-route) |
 | issue.closed | — | `issue-{N}` | **Close + delete thread** |
-| pr.opened | — | `pr-{N}` | Create thread, trigger agent |
-| pr.commented | Not bot | `pr-{N}` | Trigger agent |
-| pr.labeled | Label matches pattern | `pr-{N}` | Trigger agent |
+| pr.opened | Labels match pattern | `pr-{N}` | Create thread, trigger agent |
+| pr.commented | Not self-loop | `pr-{N}` | Trigger agent |
+| pr.labeled | New labels match pattern | `pr-{N}` | Trigger agent (re-route) |
 | pr.review_submitted | — | `pr-{N}` | Trigger developer agent |
 | pr.merged | — | `pr-{N}`, `review-pr-{N}`, linked `issue-{N}` | **Close + delete all** |
 | pr.closed (not merged) | — | `pr-{N}`, `review-pr-{N}` | **Close + delete** (keep issue thread) |
+
+**Label change detection**: On each poll cycle, the adapter compares the current
+labels on each issue/PR against the previously cached labels. If new labels were
+added, a `labeled` event is generated and routed through normal pattern matching.
+This allows users to add labels (e.g., `jyc:plan`) to existing issues and have
+them routed to the correct agent.
 
 ### Self-Loop Prevention (Comment Filtering)
 

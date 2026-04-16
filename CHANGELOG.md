@@ -11,6 +11,10 @@ All notable changes to JYC will be documented in this file.
 - Auto-label is combined (OR) with any explicit `labels` in pattern config
 - PRs/issues must have the matching label to be routed (labels added by agents during hand-off)
 
+**GitHub Label Change Detection** — Adding labels to existing issues/PRs triggers routing
+- When labels are added to an existing issue/PR, the change is detected by comparing against cached labels
+- This allows users to add a label (e.g., `jyc:plan`) to an existing issue and have it routed to the planner
+
 ### Changed
 
 **GitHub Self-Loop Prevention** — Replaces global `[Role]` prefix filter

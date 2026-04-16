@@ -33,12 +33,13 @@ For each step:
 2. Make the change (smallest possible unit)
 3. Verify: cargo check (no errors — fast syntax/type check)
 4. Verify: cargo test (all pass)
-5. Send reply with:
+5. Commit and push: git add . && git commit -m "<step description>" && git push
+6. Send reply with:
    - What was done
    - Check result (pass/fail)
    - Test result (pass/fail)
    - What the next step will be
-6. STOP and WAIT for user approval before next step
+7. STOP and WAIT for user approval before next step
 ```
 
 After ALL steps are complete:
@@ -55,6 +56,7 @@ code generation. Full `cargo build --release` only runs once at the end.
 
 - **ONE change per step** — do not combine multiple changes
 - **NEVER skip validation** — every step must pass `cargo check` and `cargo test`
+- **ALWAYS commit and push** — every step must be committed and pushed after validation
 - **NEVER proceed without approval** — wait for user to say "yes", "continue", "next", or similar
 - **If check fails** — fix it in the SAME step before reporting
 - **If tests fail** — fix them in the SAME step before reporting
@@ -75,8 +77,9 @@ When creating an implementation plan, also follow this principle:
 ```
 ✅ Step N/Total: <what was done>
 
-Build: ✅ zero warnings
+Check: ✅ no errors
 Tests: ✅ N tests pass
+Commit: <short commit hash>
 
 Next step: <brief description of next step>
 

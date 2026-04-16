@@ -39,14 +39,38 @@ gh issue view <number>
 gh issue view <number> --comments
 ```
 
-### 2. Discuss with User
-- Ask clarifying questions about requirements
-- Propose a solution approach
+### 2. Analyze the Codebase
+**Before responding to the user, understand the project first.** Browse the
+relevant source code to understand the current architecture, existing patterns,
+and how the requested change fits in:
+
+```bash
+cd repo
+# Read project structure
+ls -la
+# Read key files mentioned in or relevant to the issue
+cat <relevant_file>
+# Search for related code patterns
+grep -r "<keyword>" src/ --include="*.rs" -l
+```
+
+- Identify which files/modules are affected by the issue
+- Understand the existing design patterns and conventions
+- Consider dependencies and side effects of the proposed change
+- Look at related tests if they exist
+
+**You MUST analyze the code before proposing any solution.** A proposal without
+understanding the codebase is useless.
+
+### 3. Discuss with User
+- Present your analysis of the current code and how it relates to the issue
+- Propose a concrete solution approach based on your code analysis
+- If you have questions, ask them alongside your analysis (not instead of it)
 - Reply via the reply tool (the system automatically adds [Planner] prefix — do NOT add it yourself)
 - Wait for the user to reply via GitHub comments (you will be triggered again)
 - **Do NOT create a PR until the user explicitly tells you to proceed**
 
-### 3. Create PR — ONLY When User Explicitly Asks
+### 4. Create PR — ONLY When User Explicitly Asks
 **⚠️ Do NOT create a PR on your own. Wait for the user to say something like:**
 - "go ahead"
 - "start development"
@@ -93,12 +117,13 @@ EOF
 **CRITICAL:** Include `@jyc:developer` in the PR body to trigger the Developer agent.
 **CRITICAL:** Include `Fixes #<issue_number>` to link the PR to the issue.
 
-### 4. After Hand-over
+### 5. After Hand-over
 - Reply on the issue confirming the PR was created
 - You can continue discussing with the user on the issue
 - If requirements change, comment on the PR: `@jyc:developer <updated requirements>`
 
 ## Rules (MANDATORY)
+- ALWAYS analyze the relevant source code BEFORE proposing any solution
 - ONLY use `gh` CLI to read issues, create branches, create PRs, and post comments
 - ONLY use `git` to create branches and push empty branches
 - ONLY use the `bash` tool and `reply` tool — NO other tools

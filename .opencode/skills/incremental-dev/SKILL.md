@@ -31,24 +31,35 @@ For each step:
 ```
 1. Describe what this step will do (brief, 1-2 sentences)
 2. Make the change (smallest possible unit)
-3. Verify: cargo build --release (zero warnings)
+3. Verify: cargo check (no errors — fast syntax/type check)
 4. Verify: cargo test (all pass)
 5. Send reply with:
    - What was done
-   - Build result (pass/fail)
+   - Check result (pass/fail)
    - Test result (pass/fail)
    - What the next step will be
 6. STOP and WAIT for user approval before next step
 ```
 
+After ALL steps are complete:
+```
+7. Run: cargo build --release (zero warnings)
+8. Report final results
+```
+
+Note: Use `cargo check` (seconds) instead of `cargo build` (minutes) for
+per-step validation. Both catch the same compile errors, but `check` skips
+code generation. Full `cargo build --release` only runs once at the end.
+
 ### Rules
 
 - **ONE change per step** — do not combine multiple changes
-- **NEVER skip validation** — every step must compile and pass tests
+- **NEVER skip validation** — every step must pass `cargo check` and `cargo test`
 - **NEVER proceed without approval** — wait for user to say "yes", "continue", "next", or similar
-- **If build fails** — fix it in the SAME step before reporting
+- **If check fails** — fix it in the SAME step before reporting
 - **If tests fail** — fix them in the SAME step before reporting
 - **Do NOT batch steps** — even if you know all the steps, execute one at a time
+- **Use `cargo check`, not `cargo build`** — `check` is fast (seconds), `build` is slow (minutes). Both catch the same errors. Full `cargo build --release` only runs once at the end.
 
 ### Planning
 
@@ -88,8 +99,9 @@ Shall I retry or adjust the approach?
 
 ### Anti-Patterns (DO NOT)
 
-- Do NOT make 5 file changes and then run build
+- Do NOT make 5 file changes and then run check
 - Do NOT skip tests "because it's a small change"
+- Do NOT run `cargo build` on every step — use `cargo check` instead
 - Do NOT continue to the next step without user approval
 - Do NOT present a large diff as "one step"
 - Do NOT assume the user approves — wait for explicit confirmation

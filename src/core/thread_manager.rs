@@ -70,6 +70,9 @@ pub struct ThreadManager {
     event_buses: Mutex<HashMap<String, ThreadEventBusRef>>,
     enable_events: bool,
 
+    // Per-thread cancellation tokens (used by close_thread to stop workers)
+    thread_cancels: Mutex<HashMap<String, CancellationToken>>,
+
     // Heartbeat configuration
     heartbeat_config: HeartbeatConfig,
 
@@ -139,6 +142,7 @@ impl ThreadManager {
             agent,
             event_buses: Mutex::new(HashMap::new()),
             enable_events,
+            thread_cancels: Mutex::new(HashMap::new()),
             heartbeat_config,
             heartbeat_template,
             template_dir,
@@ -235,6 +239,13 @@ impl ThreadManager {
             None
         };
 
+        // Create per-thread cancellation token so close_thread can stop this worker
+        let thread_cancel = CancellationToken::new();
+        {
+            let mut cancels = self.thread_cancels.lock().await;
+            cancels.insert(thread_name.clone(), thread_cancel.clone());
+        }
+
         let tm = Arc::new(ThreadManager {
             thread_queues: Mutex::new(HashMap::new()),
             semaphore: self.semaphore.clone(),
@@ -244,6 +255,7 @@ impl ThreadManager {
             agent: self.agent.clone(),
             event_buses: Mutex::new(HashMap::new()),
             enable_events: self.enable_events,
+            thread_cancels: Mutex::new(HashMap::new()),
             heartbeat_config: self.heartbeat_config.clone(),
             heartbeat_template: self.heartbeat_template.clone(),
             template_dir: self.template_dir.clone(),
@@ -251,7 +263,7 @@ impl ThreadManager {
             cancel: self.cancel.clone(),
             worker_handles: Mutex::new(vec![]),
         });
-        let handle = ThreadManager::spawn_worker(tm, thread_name, rx, event_bus);
+        let handle = ThreadManager::spawn_worker(tm, thread_name, rx, event_bus, thread_cancel);
 
         // Drain completed worker handles to prevent unbounded Vec growth.
         let mut handles = self.worker_handles.lock().await;
@@ -270,6 +282,7 @@ impl ThreadManager {
         thread_name: String,
         mut rx: mpsc::Receiver<QueueItem>,
         event_bus: Option<ThreadEventBusRef>,
+        thread_cancel: CancellationToken,
     ) -> JoinHandle<()> {
         let semaphore = thread_manager.semaphore.clone();
         let cancel = thread_manager.cancel.clone();
@@ -290,6 +303,7 @@ impl ThreadManager {
                     Err(_) => return,
                 },
                 _ = cancel.cancelled() => return,
+                _ = thread_cancel.cancelled() => return,
             };
 
             tracing::info!("Worker started");
@@ -301,6 +315,7 @@ impl ThreadManager {
             let (current_message_tx, current_message_rx) = tokio::sync::watch::channel(None);
 
             // Start event listener if event bus is provided and heartbeat is enabled
+            let thread_cancel_for_listener = thread_cancel.clone();
             let event_listener_handle = if heartbeat_config.enabled {
                 if let Some(event_bus) = event_bus {
                     tracing::trace!(thread = %thread_name, "Creating event listener with heartbeat control");
@@ -322,6 +337,7 @@ impl ThreadManager {
                                 current_message_rx_clone,
                                 hb_config,
                                 hb_template,
+                                thread_cancel_for_listener,
                             ).await;
                              tracing::trace!(thread = %thread_name_for_finish, "Event listener finished");
                         }))
@@ -343,6 +359,10 @@ impl ThreadManager {
                     },
                     _ = cancel.cancelled() => {
                         tracing::info!("Worker cancelled");
+                        break;
+                    }
+                    _ = thread_cancel.cancelled() => {
+                        tracing::info!("Worker cancelled (thread closed)");
                         break;
                     }
                 };
@@ -430,6 +450,7 @@ impl ThreadManager {
         current_message_rx: tokio::sync::watch::Receiver<Option<crate::channels::types::InboundMessage>>,
         heartbeat_config: HeartbeatConfig,
         heartbeat_template: String,
+        thread_cancel: CancellationToken,
     ) {
     use std::time::{Instant, Duration};
     
@@ -585,6 +606,11 @@ impl ThreadManager {
                     );
                 }
             }
+            // Thread closed — stop the event listener
+            _ = thread_cancel.cancelled() => {
+                tracing::debug!(thread = %thread_name, "Event listener cancelled (thread closed)");
+                break;
+            }
         }
     }
     
@@ -627,6 +653,13 @@ impl ThreadManager {
     pub async fn shutdown(&self) {
         self.cancel.cancel();
         {
+            // Cancel all per-thread tokens
+            let mut cancels = self.thread_cancels.lock().await;
+            for (_, token) in cancels.drain() {
+                token.cancel();
+            }
+        }
+        {
             let mut queues = self.thread_queues.lock().await;
             queues.clear();
         }
@@ -662,6 +695,15 @@ impl ThreadManager {
 
     /// Clean up in-memory state (queues, event buses) for a closed thread.
     async fn cleanup_thread_state(&self, thread_name: &str) {
+        // Cancel the per-thread token so the worker + event listener exit promptly
+        {
+            let mut cancels = self.thread_cancels.lock().await;
+            if let Some(token) = cancels.remove(thread_name) {
+                token.cancel();
+                tracing::debug!(thread = %thread_name, "Per-thread cancellation token cancelled");
+            }
+        }
+
         // Remove from thread_queues
         {
             let mut queues = self.thread_queues.lock().await;

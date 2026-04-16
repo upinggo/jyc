@@ -65,6 +65,7 @@ gh pr review <number> --request-changes --body "$(cat <<'EOF'
 Please address the issues above.
 EOF
 )"
+gh pr comment <number> --body "@jyc:developer Please address the review feedback."
 ```
 
 If approved:

@@ -27,6 +27,15 @@ if [ -z "$INSTALL_BINARY" ]; then
     exit 1
 fi
 
+# Detect whether systemctl --user is available
+has_systemd_user() {
+    systemctl --user daemon-reload 2>/dev/null
+}
+
+# PID file for nohup fallback
+PIDFILE="${JYC_WORKDIR:-.}/jyc.pid"
+LOGFILE="${JYC_WORKDIR:-.}/jyc.log"
+
 echo "Source binary: ${NEW_BINARY}"
 echo "Install target: ${INSTALL_BINARY}"
 echo ""
@@ -38,7 +47,7 @@ if [ ! -f "${NEW_BINARY}" ]; then
     exit 1
 fi
 
-echo "✓ New binary found: ${NEW_BINARY}"
+echo "New binary found: ${NEW_BINARY}"
 NEW_VERSION=$("${NEW_BINARY}" --version 2>/dev/null || echo "unknown")
 echo "  Version: ${NEW_VERSION}"
 echo ""
@@ -58,12 +67,23 @@ echo "Waiting 5 seconds for pending operations..."
 sleep 5
 
 # Stop service
-echo "Stopping jyc service..."
-if ! systemctl --user is-active --quiet jyc; then
-    echo "  Service not running (will skip stop)"
+echo "Stopping jyc..."
+if has_systemd_user; then
+    if systemctl --user is-active --quiet jyc 2>/dev/null; then
+        systemctl --user stop jyc
+        echo "  Service stopped (systemd)"
+    else
+        echo "  Service not running (systemd)"
+    fi
 else
-    systemctl --user stop jyc
-    echo "  ✓ Service stopped"
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        kill "$(cat "$PIDFILE")"
+        sleep 1
+        echo "  Process stopped (nohup, PID $(cat "$PIDFILE"))"
+        rm -f "$PIDFILE"
+    else
+        echo "  Process not running (nohup)"
+    fi
 fi
 echo ""
 
@@ -71,27 +91,36 @@ echo ""
 echo "Copying new binary to ${INSTALL_BINARY}..."
 cp "${NEW_BINARY}" "${INSTALL_BINARY}"
 chmod +x "${INSTALL_BINARY}"
-echo "  ✓ Binary installed"
+echo "  Binary installed"
 echo ""
 
 # Start service
-echo "Starting jyc service..."
-systemctl --user start jyc
-
-# Wait and check status
-sleep 2
-if systemctl --user is-active --quiet jyc; then
-    echo "  ✓ Service started successfully"
+echo "Starting jyc..."
+if has_systemd_user; then
+    systemctl --user start jyc
+    sleep 2
+    if systemctl --user is-active --quiet jyc; then
+        echo "  Service started successfully (systemd)"
+    else
+        echo "  Service failed to start"
+        echo "  Check logs: journalctl --user -u jyc -n 50"
+        exit 1
+    fi
+    echo ""
+    echo "Service status:"
+    systemctl --user status jyc --no-pager | head -3
 else
-    echo "  ✗ Service failed to start"
-    echo "  Check logs: journalctl --user -u jyc -n 50"
-    exit 1
+    nohup "$SCRIPT_DIR/run-jyc.sh" > "$LOGFILE" 2>&1 &
+    echo $! > "$PIDFILE"
+    sleep 2
+    if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo "  Process started (nohup, PID $(cat "$PIDFILE"))"
+    else
+        echo "  Process failed to start"
+        echo "  Check logs: $LOGFILE"
+        exit 1
+    fi
 fi
-echo ""
-
-# Show service status
-echo "Service status:"
-systemctl --user status jyc --no-pager | head -3
 echo ""
 
 echo "=== Deployment complete ==="

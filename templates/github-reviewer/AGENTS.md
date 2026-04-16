@@ -65,6 +65,7 @@ gh pr review <number> --request-changes --body "$(cat <<'EOF'
 Please address the issues above.
 EOF
 )"
+gh label create "jyc:develop" --description "Route to developer agent" --color "0E8A16" 2>/dev/null || true
 gh pr edit <number> --add-label "jyc:develop"
 gh pr comment <number> --body "@jyc:developer Please address the review feedback."
 ```

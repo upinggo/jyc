@@ -65,6 +65,9 @@ git checkout -b feat/issue-<number>
 # Push the empty branch (NO code changes, NO file creation)
 git push -u origin feat/issue-<number>
 
+# Ensure the routing label exists
+gh label create "jyc:develop" --description "Route to developer agent" --color "0E8A16" 2>/dev/null || true
+
 # Create PR with spec in body. Add jyc:develop label to trigger the developer.
 gh pr create --title "feat: <description>" --label "jyc:develop" --body "$(cat <<'EOF'
 ## Spec

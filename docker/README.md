@@ -2,40 +2,25 @@
 
 Run JYC as a containerized service with process supervision via s6-overlay.
 
-## Image Variants
-
-| Variant | Target | Size | Rust | Use Case |
-|---------|--------|------|------|----------|
-| `jyc:dev` | `dev` | ~1.4GB | Copied from builder | Self-bootstrapping — AI can rebuild jyc from source |
-| `jyc:latest` | `production` | ~740MB | Not included | Production — just runs the pre-compiled binary |
-
-```bash
-# Build dev image (default — includes Rust for self-bootstrapping):
-podman build --target dev -t jyc:dev -f docker/Dockerfile ..
-
-# Build production image (smaller — no Rust):
-podman build --target production -t jyc:latest -f docker/Dockerfile ..
-```
-
-Both variants share the same `base` stage (tools, s6, OpenCode, gh CLI) — building one caches the base for the other.
-
 ## Architecture
 
-- **Multi-stage build**: `base` (shared tools) → `builder` (Rust compile) → `production` or `dev`
+- **Multi-stage build**: `base` (shared tools) → `builder` (Rust compile) → `production`
 - **Single binary**: `jyc` (the MCP reply tool is a hidden subcommand `jyc mcp-reply-tool`).
 - **s6-overlay**: Process supervision — automatically restarts JYC if it crashes.
-- **Self-bootstrapping** (dev image): Rust toolchain pre-installed. AI can rebuild, test, and deploy new versions without rebuilding the Docker image.
+- **Host networking**: Container shares host network (`network_mode: host`), so services on `localhost` are accessible from inside the container.
 
 ## Included Tools
 
-| Tool | Purpose | Image |
-|------|---------|-------|
-| OpenCode | AI agent runtime | both |
-| git, gh CLI | Version control, PRs | both |
-| ripgrep, jq | Code search, JSON processing | both |
-| curl | HTTP requests | both |
-| build-essential | C compiler for native deps | both |
-| Rust toolchain | Rebuild jyc from source (copied from builder, not installed separately) | dev only |
+| Tool | Purpose |
+|------|---------|
+| OpenCode | AI agent runtime |
+| git, gh CLI | Version control, GitHub PRs |
+| ripgrep, jq | Code search, JSON processing |
+| curl | HTTP requests |
+| build-essential | C compiler for native deps |
+| python3 | Python scripting |
+| nodejs (LTS) | JavaScript/TypeScript runtime |
+| pandoc | Document conversion |
 
 ## Prerequisites
 
@@ -52,8 +37,6 @@ Both variants share the same `base` stage (tools, s6, OpenCode, gh CLI) — buil
 ├── <channel>/
 │   ├── .imap/               ← IMAP state
 │   └── workspace/           ← Thread workspaces
-│       └── <bootstrap-thread>/
-│           └── jyc/         ← JYC source (bind-mounted for self-bootstrapping)
 ├── .netrc                   ← Git credentials
 └── gh_hosts.yml             ← GitHub CLI auth
 
@@ -75,33 +58,27 @@ cp docker/.env.example docker/.env
 
 ### 2. Build and start
 
-**With Docker/Podman Compose (dev image — default):**
+**With Docker/Podman Compose:**
 ```bash
 cd docker
 docker compose up --build -d
 docker compose logs -f
 ```
 
-**Production image (smaller, no Rust):**
-```bash
-cd docker
-JYC_BUILD_TARGET=production JYC_IMAGE_TAG=latest docker compose up --build -d
-```
-
 **With Podman (without Compose):**
 ```bash
-# Build dev image (with Rust):
-podman build --target dev -t jyc:dev -f docker/Dockerfile ..
-
-# Or production image (no Rust):
-podman build --target production -t jyc:latest -f docker/Dockerfile ..
+# Build
+podman build -t jyc:latest -f docker/Dockerfile ..
 
 # Run
 podman run -d --name jyc \
+  --network=host \
   -v /path/to/jyc-data:/opt/jyc \
   -v /path/to/opencode.jsonc:/root/.config/opencode/opencode.jsonc:ro \
   -v /path/to/.claude/skills:/root/.claude/skills:ro \
   -v /path/to/.agents/skills:/root/.agents/skills:ro \
+  -v /path/to/jyc-data/.netrc:/root/.netrc \
+  -v /path/to/jyc-data/gh_hosts.yml:/root/.config/gh/hosts.yml \
   --restart unless-stopped \
   jyc:latest
 ```
@@ -117,25 +94,12 @@ podman logs -f jyc
 ### 4. Restart the service
 
 ```bash
-# From inside the container (e.g., after AI rebuild + deploy):
+# From inside the container:
 s6-svc -r /run/service/jyc
 
 # From outside:
 docker compose restart jyc
 ```
-
-## Self-Bootstrapping
-
-The AI (via OpenCode) can rebuild and deploy JYC from inside the container:
-
-1. Copy `docker/system.md.example` to your thread's `system.md`
-2. Send an email asking the AI to build and deploy
-3. The AI will:
-   - Run `cargo test` to verify
-   - Run `cargo build --release` to compile
-   - Copy the binary to `/usr/local/bin/jyc`
-   - Restart the service via `s6-svc -r /run/service/jyc`
-4. JYC restarts and sends a startup notification email confirming readiness
 
 ## Volume Mounts
 
@@ -143,12 +107,21 @@ The AI (via OpenCode) can rebuild and deploy JYC from inside the container:
 |-------|---------------|---------|
 | JYC data dir | `/opt/jyc` | Config, channels, workspace |
 | OpenCode config | `/root/.config/opencode/opencode.jsonc` | API keys, providers |
-| OpenCode data | `/root/.local/share/opencode` | Sessions DB, logs, snapshots (persisted across restarts) |
+| OpenCode data | `/root/.local/share/opencode` | Sessions DB, logs, snapshots |
 | Claude skills | `/root/.claude/skills` | Skills (read-only) |
 | Agent skills | `/root/.agents/skills` | Agent skills (read-only) |
-| JYC source | `<channel>/workspace/<thread>/jyc` | For AI self-bootstrapping (bind-mounted) |
 | .netrc | `/root/.netrc` | Git credentials |
 | gh_hosts.yml | `/root/.config/gh/hosts.yml` | GitHub CLI auth |
+
+### Project Source Mounts
+
+To give the AI agent access to project source code, mount directories into
+the thread workspace. Customize per your channel/thread layout:
+
+```yaml
+volumes:
+  - /path/to/project:/opt/jyc/<channel>/workspace/<thread>/project
+```
 
 ## Troubleshooting
 

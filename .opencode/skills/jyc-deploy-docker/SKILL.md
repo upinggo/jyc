@@ -12,7 +12,7 @@ CRITICAL: AI MUST use TWO-PHASE CONFIRMATION for ALL build/deploy operations:
 Phase 1 - Present Plan:
 - List ALL commands that will be executed
 - Explain what each command does
-- State potential risks (e.g., "build will take 2-3 min", "deploy will restart the session")
+- State potential risks (e.g., "build will take 2-3 min", "deploy will restart the container")
 
 Phase 2 - Wait for Approval:
 - Ask the user to type "yes" or "proceed" to continue
@@ -21,49 +21,45 @@ Phase 2 - Wait for Approval:
 
 CRITICAL: Never execute build/deploy commands without explicit user approval.
 
-## Build Environment
-- The source is bind-mounted from the host into the container
-- CARGO_TARGET_DIR is set to /tmp/jyc-target to avoid cross-platform conflicts with the host's target/ directory
-- Do NOT build into ./target/ directly — always use the CARGO_TARGET_DIR environment variable (already set)
-- Rust is pre-installed in the dev image. If using the production image, install it on-demand:
-  `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source "$HOME/.cargo/env"`
+## Docker Deployment
 
-## Build (when instructed)
+The Docker image is a production-only image. There is no Rust toolchain inside
+the container. To update jyc, rebuild the Docker image from the host.
+
+### Build (when instructed)
 MUST follow TWO-PHASE CONFIRMATION above before executing.
 MUST execute EXACTLY these commands in order:
 
-1. Ensure Rust is installed (see above)
-2. cd jyc && cargo test
-3. cargo build --release
-4. $CARGO_TARGET_DIR/release/jyc --version
-5. Report: version, binary size, test results
+1. cd jyc && cargo test
+2. cargo build --release
+3. ./target/release/jyc --version
+4. Report: version, binary size, test results
 
-CRITICAL: Do NOT improvise or use alternative build commands.
-
-## Deploy (when instructed)
+### Deploy (when instructed)
 MUST follow TWO-PHASE CONFIRMATION above before executing.
 
-WARNING: Deploy causes JYC to restart. Your session will be interrupted.
-WARNING: A startup notification email will confirm the new version is running.
+WARNING: Deploy rebuilds the container image and restarts the service.
 
 MUST execute EXACTLY these steps in order:
 
-Step 1: Verify $CARGO_TARGET_DIR/release/jyc exists
-Step 2: Send a reply FIRST using the reply_message tool — confirm the deployment is starting and report the build results
-Step 3: AFTER the reply is sent, execute these deploy commands EXACTLY:
+Step 1: Rebuild the Docker image:
    ```
-   cp $CARGO_TARGET_DIR/release/jyc /usr/local/bin/jyc && s6-svc -r /run/service/jyc
+   cd jyc
+   podman build -t jyc:latest -f docker/Dockerfile .
    ```
-Step 4: STOP immediately after running the deploy commands. Do NOT run any more commands.
+Step 2: Restart the container:
+   ```
+   cd jyc/docker
+   podman compose down && podman compose up -d
+   ```
+Step 3: Verify the service is running:
+   ```
+   podman compose logs -f jyc
+   ```
 
-CRITICAL Warnings:
-- Do NOT send a reply AFTER the deploy commands — the process will be dead and the reply will fail
-- Do NOT run the deploy commands multiple times — one restart is sufficient
-- Do NOT improvise or use alternative commands (e.g., do NOT use `s6-svc -t /run/service/jyc` or any other variant)
-
-## Build and Deploy (when instructed)
+### Build and Deploy (when instructed)
 MUST follow TWO-PHASE CONFIRMATION above before executing.
 MUST execute EXACTLY these steps in order:
 
-1. Run the Build steps above (test + compile)
-2. Run the Deploy steps above (reply first, then cp + restart, then STOP)
+1. Run the Build steps above (test + compile locally to verify)
+2. Run the Deploy steps above (rebuild image + restart container)

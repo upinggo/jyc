@@ -1,11 +1,11 @@
 # ── Stage 1: Base tools (cached — rarely changes) ─────────────────────
 FROM debian:bookworm-slim AS base
 
-# Dev tools (needed by OpenCode AI for coding tasks)
+# Runtime tools for jyc and AI agent
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ripgrep jq procps xz-utils inotify-tools \
     ca-certificates pkg-config libssl-dev build-essential \
-    protobuf-compiler pandoc \
+    pandoc python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # s6-overlay for process supervision
@@ -33,7 +33,12 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
     && apt-get update && apt-get install -y --no-install-recommends gh && rm -rf /var/lib/apt/lists/*
 
-# Shared setup: s6 service, directories, env, workdir, volumes, entrypoint
+# Install Node.js LTS (same approach as bare metal)
+RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Shared setup: s6 service, directories, workdir, volumes, entrypoint
 COPY docker/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
 RUN touch /etc/s6-overlay/s6-rc.d/user/contents.d/jyc
 
@@ -41,8 +46,6 @@ RUN mkdir -p /root/.claude/skills /root/.agents/skills \
     /root/.config/opencode /root/.config/gh \
     /root/.local/share/opencode \
     /opt/jyc
-
-ENV CARGO_TARGET_DIR="/tmp/jyc-target"
 
 WORKDIR /opt/jyc
 
@@ -53,29 +56,19 @@ ENTRYPOINT ["/init"]
 # ── Stage 2: Build jyc (changes when source changes) ─────────────────
 FROM rust:bookworm AS builder
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    protobuf-compiler libprotobuf-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
-COPY config_template.toml ./
+COPY config.example.toml ./
 
 RUN cargo build --release
 
-# ── Stage 3a: Production image (no Rust, ~740MB) ─────────────────────
-# Build: podman build --target production -t jyc:latest -f docker/Dockerfile ..
+# ── Stage 3: Production image ────────────────────────────────────────
+# Build: podman build -t jyc:latest -f docker/Dockerfile ..
 FROM base AS production
-
-COPY --from=builder /build/target/release/jyc /usr/local/bin/jyc
-
-# ── Stage 3b: Dev image (with Rust for self-bootstrapping, ~1.4GB) ────
-# Build: podman build --target dev -t jyc:dev -f docker/Dockerfile ..
-FROM base AS dev
-
-# Copy Rust toolchain from the builder stage (already downloaded — no separate install)
-COPY --from=builder /usr/local/rustup /usr/local/rustup
-COPY --from=builder /usr/local/cargo /usr/local/cargo
-ENV RUSTUP_HOME="/usr/local/rustup"
-ENV CARGO_HOME="/usr/local/cargo"
-ENV PATH="/usr/local/cargo/bin:${PATH}"
-ENV CARGO_TARGET_DIR="/tmp/jyc-target"
 
 COPY --from=builder /build/target/release/jyc /usr/local/bin/jyc

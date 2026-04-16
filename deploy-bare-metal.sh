@@ -43,7 +43,8 @@ fi
 
 echo "=== Installing system packages ==="
 sudo apt-get update
-sudo apt-get install -y git curl build-essential pkg-config libssl-dev protobuf-compiler zsh
+sudo apt-get install -y git curl build-essential pkg-config libssl-dev \
+    protobuf-compiler zsh ripgrep jq pandoc inotify-tools
 
 echo "=== Installing oh-my-zsh ==="
 if [ ! -d "$HOME/.oh-my-zsh" ]; then
@@ -66,6 +67,16 @@ echo "=== Installing Node.js LTS ==="
 if ! command -v node &> /dev/null; then
     curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
     sudo apt-get install -y nodejs
+fi
+
+echo "=== Installing GitHub CLI ==="
+if ! command -v gh &> /dev/null; then
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+    sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+    sudo apt-get update && sudo apt-get install -y gh
 fi
 
 echo "=== Installing Starship ==="

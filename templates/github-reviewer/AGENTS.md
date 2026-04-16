@@ -65,6 +65,7 @@ gh pr review <number> --request-changes --body "$(cat <<'EOF'
 Please address the issues above.
 EOF
 )"
+gh pr edit <number> --add-label "jyc:develop"
 gh pr comment <number> --body "@jyc:developer Please address the review feedback."
 ```
 
@@ -92,4 +93,4 @@ EOF
 - Do NOT merge the PR — that's the user's decision
 - Be constructive and objective in feedback
 - Do NOT use the `jyc_question_ask_user` tool
-- When requesting changes, ALWAYS post a comment with `@jyc:developer` to trigger the developer
+- When requesting changes, ALWAYS add label `jyc:develop` and post a comment with `@jyc:developer` to trigger the developer

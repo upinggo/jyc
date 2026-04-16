@@ -7,10 +7,15 @@ repositories through issue discussion, PR development, and code review.
 
 1. **Channel = Lightweight Trigger + Router** — Channel only polls events and
    routes them. Agents use `gh` CLI to read/write actual content.
-2. **Label-Driven Hand-over** — Agents signal each other by adding labels.
-   Channel routes based on label changes.
-3. **One Token, Role Prefix** — Single GitHub PAT. Agents prefix comments
-   with `[Planner]`, `[Developer]`, `[Reviewer]` to identify themselves.
+2. **Label + Hand-over Routing** — Routing uses two mechanisms:
+   - **Labels** (`jyc:plan`, `jyc:develop`, `jyc:review`) for persistent routing.
+     Agents add labels when creating PRs or handing off. Auto-labels are derived
+     from the pattern's `role` field (e.g., `role = "Developer"` → `jyc:develop`).
+   - **`@jyc:<role>` markers** in comments for one-shot hand-over between agents.
+3. **One Token, Role Prefix + Self-Loop Prevention** — Single GitHub PAT. Agents
+   prefix comments with `[Planner]`, `[Developer]`, `[Reviewer]`. Each pattern
+   only skips comments from its **own** role (self-loop prevention), but allows
+   comments from other roles through for cross-agent visibility.
 4. **Independent Threads** — Each agent role gets its own thread with separate
    repo clone, AGENTS.md, and context.
 5. **Immediate Close + Delete** — When issue/PR closes, thread is immediately
@@ -122,15 +127,23 @@ InboundMessage {
 | pr.merged | — | `pr-{N}`, `review-pr-{N}`, linked `issue-{N}` | **Close + delete all** |
 | pr.closed (not merged) | — | `pr-{N}`, `review-pr-{N}` | **Close + delete** (keep issue thread) |
 
-### Bot Comment Filtering
+### Self-Loop Prevention (Comment Filtering)
 
-At startup, the channel fetches the authenticated user (`GET /user`) to get
-the bot's GitHub username. All comments from this username are skipped during
-polling to prevent infinite loops.
+Agent comments are identified by the `[Role]` prefix (e.g., `[Developer]`, `[Reviewer]`).
+Instead of globally filtering all agent comments, each pattern only skips comments
+from its **own** role. This enables cross-agent visibility:
+
+- `[Developer]` comment → **skipped** by developer pattern, **visible** to reviewer pattern
+- `[Reviewer]` comment → **skipped** by reviewer pattern, **visible** to developer pattern
+- Human comments (no prefix) → visible to all patterns
+
+The `comment_role` is extracted from the prefix and stored in message metadata.
+During pattern matching, if `comment_role` matches the pattern's `role`, the
+pattern is skipped (self-loop prevention).
 
 ## Pattern Matching
 
-### New PatternRules Fields
+### PatternRules Fields (GitHub-specific)
 
 ```rust
 pub struct PatternRules {
@@ -138,15 +151,34 @@ pub struct PatternRules {
 
     // GitHub-specific
     pub github_type: Option<Vec<String>>,    // ["issue"] or ["pull_request"]
-    pub github_event: Option<Vec<String>>,   // ["opened", "labeled"]
-    pub labels: Option<Vec<String>>,          // ["ready-for-dev", "bug"]
+    pub labels: Option<Vec<String>>,          // ["bug", "custom-label"]
 }
 ```
 
-**Match logic (AND across fields, OR within each field):**
-- `github_type: ["issue"]` → only match issue events, not PR events
-- `labels: ["ready-for-dev", "bug"]` → match if ANY of these labels present
-- Both set → must be issue AND have one of the labels
+### Auto-Label from Role
+
+Each pattern with a `role` field gets an implicit routing label derived from
+the role name:
+
+| Role | Auto-Label |
+|------|-----------|
+| `Planner` | `jyc:plan` |
+| `Developer` | `jyc:develop` |
+| `Reviewer` | `jyc:review` |
+
+The auto-label is combined (OR) with any explicit `labels` in the pattern config.
+A pattern matches if ANY of the effective labels (explicit + auto-label) is present
+on the issue/PR.
+
+**Match logic:**
+- `github_type` + labels: AND across fields, OR within each field
+- Labels = explicit `labels` config + auto-label from `role` (OR logic)
+- Self-loop check: skip if comment is from the pattern's own role
+
+### Routing Priority
+
+1. **Hand-over markers** (`@jyc:<role>` in comments) — highest priority, bypasses labels
+2. **Normal matching** — `github_type` + labels + self-loop check
 
 ### Configuration Example
 
@@ -160,35 +192,39 @@ repo = "jyc"
 token = "${GITHUB_TOKEN}"
 poll_interval_secs = 60
 
-# Pattern 1: New issues → Planner
+# Pattern 1: Issues with jyc:plan label → Planner
 [[channels.my_repo.patterns]]
 name = "planner"
+role = "Planner"
 enabled = true
 template = "github-planner"
 
 [channels.my_repo.patterns.rules]
 github_type = ["issue"]
+# Auto-label "jyc:plan" is implicit from role = "Planner"
 
-# Pattern 2: PRs labeled 'ready-for-dev' → Developer
+# Pattern 2: PRs with jyc:develop label → Developer
 [[channels.my_repo.patterns]]
 name = "developer"
+role = "Developer"
 enabled = true
 template = "github-developer"
 live_injection = false
 
 [channels.my_repo.patterns.rules]
 github_type = ["pull_request"]
-labels = ["ready-for-dev"]
+# Auto-label "jyc:develop" is implicit from role = "Developer"
 
-# Pattern 3: PRs labeled 'ready-for-review' → Reviewer
+# Pattern 3: PRs with jyc:review label → Reviewer
 [[channels.my_repo.patterns]]
 name = "reviewer"
+role = "Reviewer"
 enabled = true
 template = "github-reviewer"
 
 [channels.my_repo.patterns.rules]
 github_type = ["pull_request"]
-labels = ["ready-for-review"]
+# Auto-label "jyc:review" is implicit from role = "Reviewer"
 ```
 
 ## Thread Naming
@@ -219,42 +255,30 @@ Each thread gets its own directory:
     AGENTS.md         ← Reviewer role definition
 ```
 
-## Slash Commands
+## Routing Labels
 
-Users and agents can use slash commands in GitHub comments. The channel
-parses these and adds corresponding labels automatically.
-
-| Command | Label Added | Effect |
-|---------|-------------|--------|
-| `/develop` | `ready-for-dev` | Trigger Developer agent |
-| `/review` | `ready-for-review` | Trigger Reviewer agent |
-| `/approve` | `approved` | Mark PR as approved |
-| `/close` | — | Close issue/PR |
-
-Slash commands are parsed by the InboundAdapter **before** routing. The
-channel adds the label via GitHub API, which then triggers the appropriate
-pattern match on the next poll cycle.
-
-## Labels
-
-Agents manage labels themselves via `gh` CLI. If a label doesn't exist,
-the agent creates it.
+Agents manage routing labels via `gh` CLI when handing off work.
+Labels are a fixed convention hardcoded in agent templates.
 
 ### Predefined Labels
 
-| Label | Color | Purpose | Added By |
-|-------|-------|---------|----------|
-| `ready-for-dev` | `#0E8A16` (green) | Planner finished, developer can start | Agent A |
-| `ready-for-review` | `#1D76DB` (blue) | Developer finished, reviewer can start | Agent B |
-| `changes-requested` | `#E4E669` (yellow) | Reviewer requested changes | Agent C |
-| `approved` | `#0E8A16` (green) | Reviewer approved | Agent C |
+| Label | Purpose | Added By |
+|-------|---------|----------|
+| `jyc:plan` | Issue needs planning | User (or auto from config) |
+| `jyc:develop` | PR needs development | Planner (when creating PR) |
+| `jyc:review` | PR needs code review | Developer (when done implementing) |
 
-### Label Creation by Agent
+### Label Usage by Agents
 
 ```bash
-# In skill instructions:
-gh label create "ready-for-dev" --description "Ready for development" --color "0E8A16" 2>/dev/null
-gh issue edit 42 --add-label "ready-for-dev"
+# Planner: create PR with develop label
+gh pr create --title "feat: ..." --label "jyc:develop" --body "..."
+
+# Developer: add review label when done
+gh pr edit 43 --add-label "jyc:review"
+
+# Reviewer: re-add develop label when requesting changes
+gh pr edit 43 --add-label "jyc:develop"
 ```
 
 ## Agent Roles & Skills
@@ -265,16 +289,14 @@ gh issue edit 42 --add-label "ready-for-dev"
 **Role**: Discuss requirements with user, create PR with spec when ready.
 
 **Workflow**:
-1. Triggered by new issue or issue comment
+1. Triggered by issue with `jyc:plan` label (or via hand-over)
 2. Read issue: `gh issue view {N}`
 3. Read comments: `gh issue view {N} --comments`
 4. Discuss with user (reply via jyc_reply → posts issue comment)
 5. When requirements clear:
    - Create branch: `git checkout -b feat/issue-{N}`
-   - Create PR: `gh pr create --title "..." --body "spec..." `
-   - Add label: `gh issue edit {N} --add-label "ready-for-dev"`
+   - Create PR with label: `gh pr create --label "jyc:develop" --body "...@jyc:developer"`
 6. Continue monitoring issue for user feedback
-7. Can comment on PR: `gh pr comment {PR_N} --body "[Planner] ..."`
 
 ### Agent B: Developer (github-developer)
 
@@ -282,17 +304,17 @@ gh issue edit 42 --add-label "ready-for-dev"
 **Role**: Implement code based on PR spec, address review feedback.
 
 **Workflow**:
-1. Triggered by PR with `ready-for-dev` label
+1. Triggered by PR with `jyc:develop` label (or via `@jyc:developer` hand-over)
 2. Read PR spec: `gh pr view {N}`
 3. Read linked issue: `gh issue view {linked_issue}`
 4. Clone repo, checkout PR branch
 5. Implement code (incremental-dev approach)
 6. Commit, push
-7. Add label: `gh pr edit {N} --add-label "ready-for-review"`
-8. When review feedback received:
+7. Hand over: `gh pr edit {N} --add-label "jyc:review"` + `@jyc:reviewer`
+8. When review feedback received (via `@jyc:developer` or `[Reviewer]` comment):
    - Read reviews: `gh pr view {N} --comments`
    - Fix issues, commit, push
-   - Re-request review: `gh pr edit {N} --add-label "ready-for-review"`
+   - Re-request review: `@jyc:reviewer`
 
 ### Agent C: Reviewer (github-reviewer)
 
@@ -300,12 +322,12 @@ gh issue edit 42 --add-label "ready-for-dev"
 **Role**: Review PR code quality, approve or request changes.
 
 **Workflow**:
-1. Triggered by PR with `ready-for-review` label
+1. Triggered by PR with `jyc:review` label (or via `@jyc:reviewer` hand-over)
 2. Read PR: `gh pr view {N}`
 3. Read diff: `gh pr diff {N}`
 4. Review code
-5. Submit review: `gh pr review {N} --approve` or `gh pr review {N} --request-changes --body "..."`
-6. If changes requested: `gh pr edit {N} --add-label "changes-requested"`
+5. Submit review: `gh pr review {N} --approve` or `--request-changes`
+6. If changes requested: `gh pr edit {N} --add-label "jyc:develop"` + `@jyc:developer`
 
 ## Close & Cleanup
 
@@ -365,6 +387,8 @@ async fn send_reply(&self, original, reply_text, ...) -> Result<SendResult> {
 
 **Role prefix**: The OutboundAdapter reads the agent role from the thread's
 template/config and prepends `[Planner]`, `[Developer]`, or `[Reviewer]`.
+These prefixes are used for self-loop prevention: each pattern skips comments
+from its own role but allows comments from other roles through.
 
 ### Direct gh CLI Operations
 
@@ -416,14 +440,19 @@ Well within limits even with review fetching.
 
 Single GitHub Personal Access Token (PAT) with scopes:
 - `repo` — read/write issues, PRs, comments, labels
-- `read:user` — fetch bot's own username for comment filtering
+- `read:user` — fetch bot's own username for logging
 
-All agents share the same token. Comments are prefixed with role:
+All agents share the same token. Comments are prefixed with role for
+identification and self-loop prevention:
 ```
 [Planner] I have some questions about the requirements...
 [Developer] Implementation complete. Ready for review.
 [Reviewer] Code looks good overall. Two minor issues found.
 ```
+
+Agent comments are **not** globally filtered. Instead, each pattern only skips
+comments from its own role. A `[Developer]` comment is visible to the reviewer
+pattern, and a `[Reviewer]` comment is visible to the developer pattern.
 
 ## Full Workflow Example
 
@@ -432,7 +461,7 @@ User1                    Agent A (Planner)        Agent B (Developer)      Agent
   │                       issue-42                  pr-43                   review-pr-43
   │                                │                      │                       │
   ├─ Creates Issue #42 ──────────►│                      │                       │
-  │                                ├─ gh issue view 42    │                       │
+  │  (label: jyc:plan)            ├─ gh issue view 42    │                       │
   │                                ├─ Analyzes req        │                       │
   │  ◄── [Planner] Questions ─────┤                      │                       │
   │                                │                      │                       │
@@ -440,39 +469,39 @@ User1                    Agent A (Planner)        Agent B (Developer)      Agent
   │                                │                      │                       │
   │                                ├─ Requirements clear   │                       │
   │                                ├─ git checkout -b feat/issue-42               │
-  │                                ├─ gh pr create         │                       │
-  │                                ├─ gh issue edit 42 --add-label ready-for-dev  │
+  │                                ├─ gh pr create --label "jyc:develop"          │
+  │                                │   --body "...@jyc:developer"                 │
   │                                │                      │                       │
   │                                │   [poll: PR + label] ►│                      │
   │                                │                      ├─ gh pr view 43        │
   │                                │                      ├─ gh issue view 42     │
   │                                │                      ├─ Implement code       │
   │                                │                      ├─ git commit + push    │
-  │                                │                      ├─ gh pr edit 43 --add-label ready-for-review
+  │                                │                      ├─ gh pr edit 43 --add-label "jyc:review"
+  │                                │                      ├─ @jyc:reviewer        │
   │                                │                      │                       │
-  │                                │                      │   [poll: label] ─────►│
+  │                                │                      │   [poll: handover] ──►│
   │                                │                      │                       ├─ gh pr view 43
   │                                │                      │                       ├─ gh pr diff 43
   │                                │                      │                       ├─ Review code
   │                                │                      │                       ├─ gh pr review 43
   │                                │                      │                       │   --request-changes
   │                                │                      │                       ├─ gh pr edit 43
-  │                                │                      │                       │   --add-label changes-requested
+  │                                │                      │                       │   --add-label "jyc:develop"
+  │                                │                      │                       ├─ @jyc:developer
   │                                │                      │                       │
-  │                                │                      │◄─ [poll: review] ─────┤
+  │                                │                      │◄─ [poll: handover] ───┤
   │                                │                      ├─ gh pr view 43 --comments
   │                                │                      ├─ Fix code             │
   │                                │                      ├─ git push             │
-  │                                │                      ├─ gh pr edit 43 --add-label ready-for-review
+  │                                │                      ├─ @jyc:reviewer        │
   │                                │                      │                       │
-  │                                │                      │   [poll: label] ─────►│
+  │                                │                      │   [poll: handover] ──►│
   │                                │                      │                       ├─ gh pr diff 43
   │                                │                      │                       ├─ gh pr review 43
   │                                │                      │                       │   --approve
   │                                │                      │                       │
-  │                                │                      │                       │
   │  User merges PR #43            │                      │                       │
-  │  (or bot merges if approved)   │                      │                       │
   │                                │                      │                       │
   │  [poll: pr.merged] ───────────►│ CLOSE + DELETE ──────►│ CLOSE + DELETE ──────►│ CLOSE + DELETE
   │                                                                                

@@ -65,8 +65,8 @@ git checkout -b feat/issue-<number>
 # Push the empty branch (NO code changes, NO file creation)
 git push -u origin feat/issue-<number>
 
-# Create PR with spec in body. Include @jyc:developer to trigger the developer.
-gh pr create --title "feat: <description>" --body "$(cat <<'EOF'
+# Create PR with spec in body. Add jyc:develop label to trigger the developer.
+gh pr create --title "feat: <description>" --label "jyc:develop" --body "$(cat <<'EOF'
 ## Spec
 
 <detailed specification based on the discussion>
@@ -86,6 +86,7 @@ EOF
 ```
 
 **CRITICAL:** The PR must be EMPTY (no code changes). The developer agent will implement the code.
+**CRITICAL:** Include `--label "jyc:develop"` to route the PR to the Developer agent.
 **CRITICAL:** Include `@jyc:developer` in the PR body to trigger the Developer agent.
 **CRITICAL:** Include `Fixes #<issue_number>` to link the PR to the issue.
 
@@ -100,6 +101,7 @@ EOF
 - ONLY use the `bash` tool and `reply` tool — NO other tools
 - ALWAYS `cd repo` before running any command
 - ALWAYS include `Fixes #<issue_number>` in PR body
+- ALWAYS include `--label "jyc:develop"` when creating PR
 - ALWAYS include `@jyc:developer` in PR body
 - Reply in the same language as the user
 - Your PR must contain ZERO code changes — only the spec in the PR body

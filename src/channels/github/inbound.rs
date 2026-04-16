@@ -103,13 +103,42 @@ impl ChannelMatcher for GithubMatcher {
                 }
             }
 
-            // Check labels rule (OR logic: match if ANY label matches)
-            if let Some(ref label_rules) = pattern.rules.labels {
-                let has_match = label_rules
-                    .iter()
-                    .any(|rule| labels.contains(&rule.to_lowercase()));
-                if !has_match {
+            // Check labels rule (OR logic: match if ANY label matches).
+            // Effective labels = explicit config labels + auto-label from role.
+            // Auto-label is derived from pattern.role (e.g., "Developer" → "jyc:develop").
+            let auto_label = pattern.role.as_deref().and_then(role_to_routing_label);
+            let has_label_rules = pattern.rules.labels.is_some() || auto_label.is_some();
+
+            if has_label_rules {
+                let mut label_matched = false;
+
+                // Check explicit label rules from config
+                if let Some(ref label_rules) = pattern.rules.labels {
+                    if label_rules.iter().any(|rule| labels.contains(&rule.to_lowercase())) {
+                        label_matched = true;
+                    }
+                }
+
+                // Check auto-label derived from role
+                if let Some(auto) = auto_label {
+                    if labels.contains(&auto.to_lowercase()) {
+                        label_matched = true;
+                    }
+                }
+
+                if !label_matched {
                     continue;
+                }
+            }
+
+            // Self-loop prevention: skip if comment is from this pattern's own role.
+            // A [Developer] comment should NOT re-trigger the developer pattern,
+            // but SHOULD be visible to the reviewer pattern.
+            if let Some(comment_role) = message.metadata.get("comment_role").and_then(|v| v.as_str()) {
+                if let Some(ref pattern_role) = pattern.role {
+                    if pattern_role.eq_ignore_ascii_case(comment_role) {
+                        continue;
+                    }
                 }
             }
 
@@ -344,25 +373,13 @@ impl GithubInboundAdapter {
         );
 
         for comment in &comments {
-            // Skip ALL comments posted by JYC agents (identified by role prefix).
-            // We skip [Planner], [Developer], [Reviewer] prefixed comments to prevent
-            // infinite loops (agent posts → poll detects → agent triggered again).
-            //
-            // Cross-role triggering (e.g., reviewer comment triggers developer) is
-            // handled via LABEL changes, not comment routing. The developer reads
-            // review comments via `gh pr view --comments` when triggered by a label.
             let body_trimmed = comment.body.trim();
-            if body_trimmed.starts_with("[Planner]")
-                || body_trimmed.starts_with("[Developer]")
-                || body_trimmed.starts_with("[Reviewer]")
-            {
-                tracing::trace!(
-                    channel = %self.channel_name,
-                    comment_id = comment.id,
-                    "Skipping JYC agent comment (role prefix detected)"
-                );
-                continue;
-            }
+
+            // Extract agent role from [Role] prefix (e.g., "[Developer] ..." → "Developer").
+            // This is stored in metadata for self-loop prevention in the matcher.
+            // Unlike the previous design which globally filtered ALL agent comments,
+            // we now let them through — each pattern only skips its OWN role's comments.
+            let comment_role = extract_comment_role(body_trimmed);
 
             let event_uid = format!("comment-{}", comment.id);
 
@@ -420,6 +437,14 @@ impl GithubInboundAdapter {
                 message.metadata.insert(
                     "handover_role".to_string(),
                     serde_json::Value::String(role),
+                );
+            }
+
+            // Set comment_role in metadata for self-loop prevention in matcher
+            if let Some(ref role) = comment_role {
+                message.metadata.insert(
+                    "comment_role".to_string(),
+                    serde_json::Value::String(role.clone()),
                 );
             }
 
@@ -589,6 +614,49 @@ fn extract_handover_role(text: &str) -> Option<String> {
         .map(|m| m.as_str().to_lowercase())
 }
 
+/// Extract agent role from `[Role]` prefix in comment body.
+///
+/// Examples:
+///   "[Developer] some text" → Some("Developer")
+///   "[Reviewer] code looks good" → Some("Reviewer")
+///   "[Planner] questions about requirements" → Some("Planner")
+///   "normal comment" → None
+///   "[Unknown] something" → None
+///
+/// Only recognizes known agent roles to avoid false positives.
+fn extract_comment_role(text: &str) -> Option<String> {
+    if text.starts_with('[') {
+        if let Some(end) = text.find(']') {
+            let role = &text[1..end];
+            match role {
+                "Planner" | "Developer" | "Reviewer" => return Some(role.to_string()),
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// Map agent role name to its routing label.
+///
+/// These labels are a fixed convention, hardcoded in agent templates (AGENTS.md).
+/// Agents add these labels when creating PRs or handing off to other agents.
+/// The matcher uses them for automatic label-based routing.
+///
+/// Examples:
+///   "Developer" → Some("jyc:develop")
+///   "Reviewer"  → Some("jyc:review")
+///   "Planner"   → Some("jyc:plan")
+///   "Unknown"   → None
+fn role_to_routing_label(role: &str) -> Option<&'static str> {
+    match role.to_lowercase().as_str() {
+        "developer" => Some("jyc:develop"),
+        "reviewer" => Some("jyc:review"),
+        "planner" => Some("jyc:plan"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,7 +717,6 @@ mod tests {
                 role: Some("Developer".to_string()),
                 rules: crate::channels::types::PatternRules {
                     github_type: Some(vec!["pull_request".to_string()]),
-                    labels: Some(vec!["ready-for-dev".to_string()]),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -660,13 +727,14 @@ mod tests {
                 role: Some("Reviewer".to_string()),
                 rules: crate::channels::types::PatternRules {
                     github_type: Some(vec!["pull_request".to_string()]),
-                    labels: Some(vec!["ready-for-review".to_string()]),
                     ..Default::default()
                 },
                 ..Default::default()
             },
         ]
     }
+
+    // --- Thread name derivation ---
 
     #[test]
     fn test_derive_thread_name_issue() {
@@ -683,8 +751,34 @@ mod tests {
     }
 
     #[test]
-    fn test_match_issue_to_planner() {
-        let msg = make_message("issue", 42, &[]);
+    fn test_derive_thread_name_reviewer() {
+        let msg = make_message("pull_request", 43, &[]);
+        let pm = PatternMatch {
+            pattern_name: "reviewer".to_string(),
+            channel: "github".to_string(),
+            matches: HashMap::new(),
+        };
+        let name = GithubMatcher.derive_thread_name(&msg, &[], Some(&pm));
+        assert_eq!(name, "review-pr-43");
+    }
+
+    #[test]
+    fn test_derive_thread_name_developer() {
+        let msg = make_message("pull_request", 43, &[]);
+        let pm = PatternMatch {
+            pattern_name: "developer".to_string(),
+            channel: "github".to_string(),
+            matches: HashMap::new(),
+        };
+        let name = GithubMatcher.derive_thread_name(&msg, &[], Some(&pm));
+        assert_eq!(name, "pr-43");
+    }
+
+    // --- Auto-label routing ---
+
+    #[test]
+    fn test_match_issue_with_plan_label() {
+        let msg = make_message("issue", 42, &["jyc:plan"]);
         let patterns = make_patterns();
         let result = GithubMatcher.match_message(&msg, &patterns);
         assert!(result.is_some());
@@ -692,8 +786,17 @@ mod tests {
     }
 
     #[test]
-    fn test_match_pr_with_dev_label() {
-        let msg = make_message("pull_request", 43, &["ready-for-dev"]);
+    fn test_match_issue_without_plan_label_no_match() {
+        // Planner has role="Planner" → auto-label "jyc:plan" is required
+        let msg = make_message("issue", 42, &[]);
+        let patterns = make_patterns();
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_match_pr_with_develop_label() {
+        let msg = make_message("pull_request", 43, &["jyc:develop"]);
         let patterns = make_patterns();
         let result = GithubMatcher.match_message(&msg, &patterns);
         assert!(result.is_some());
@@ -702,7 +805,7 @@ mod tests {
 
     #[test]
     fn test_match_pr_with_review_label() {
-        let msg = make_message("pull_request", 43, &["ready-for-review"]);
+        let msg = make_message("pull_request", 43, &["jyc:review"]);
         let patterns = make_patterns();
         let result = GithubMatcher.match_message(&msg, &patterns);
         assert!(result.is_some());
@@ -718,11 +821,75 @@ mod tests {
     }
 
     #[test]
-    fn test_match_disabled_pattern_skipped() {
+    fn test_match_pr_no_labels_no_match() {
+        // Developer has role="Developer" → auto-label "jyc:develop" is required
+        let msg = make_message("pull_request", 43, &[]);
+        let patterns = make_patterns();
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_match_explicit_labels_plus_auto_label() {
+        // Pattern with both explicit labels and role (auto-label)
+        let patterns = vec![ChannelPattern {
+            name: "developer".to_string(),
+            enabled: true,
+            role: Some("Developer".to_string()),
+            rules: crate::channels::types::PatternRules {
+                github_type: Some(vec!["pull_request".to_string()]),
+                labels: Some(vec!["custom-dev".to_string()]),
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+
+        // Matches via explicit label
+        let msg1 = make_message("pull_request", 43, &["custom-dev"]);
+        let result1 = GithubMatcher.match_message(&msg1, &patterns);
+        assert!(result1.is_some());
+        assert_eq!(result1.unwrap().pattern_name, "developer");
+
+        // Also matches via auto-label
+        let msg2 = make_message("pull_request", 43, &["jyc:develop"]);
+        let result2 = GithubMatcher.match_message(&msg2, &patterns);
+        assert!(result2.is_some());
+        assert_eq!(result2.unwrap().pattern_name, "developer");
+
+        // Neither label → no match
+        let msg3 = make_message("pull_request", 43, &["unrelated"]);
+        let result3 = GithubMatcher.match_message(&msg3, &patterns);
+        assert!(result3.is_none());
+    }
+
+    #[test]
+    fn test_match_pattern_without_role_no_auto_label() {
+        // Pattern without role → no auto-label, only explicit labels checked
+        let patterns = vec![ChannelPattern {
+            name: "catch_all".to_string(),
+            enabled: true,
+            role: None,
+            rules: crate::channels::types::PatternRules {
+                github_type: Some(vec!["issue".to_string()]),
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+
+        // No role + no labels config → matches all issues (no label check)
         let msg = make_message("issue", 42, &[]);
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().pattern_name, "catch_all");
+    }
+
+    #[test]
+    fn test_match_disabled_pattern_skipped() {
+        let msg = make_message("issue", 42, &["jyc:plan"]);
         let patterns = vec![ChannelPattern {
             name: "planner".to_string(),
             enabled: false,
+            role: Some("Planner".to_string()),
             rules: crate::channels::types::PatternRules {
                 github_type: Some(vec!["issue".to_string()]),
                 ..Default::default()
@@ -732,6 +899,200 @@ mod tests {
         let result = GithubMatcher.match_message(&msg, &patterns);
         assert!(result.is_none());
     }
+
+    // --- Hand-over routing ---
+
+    #[test]
+    fn test_match_handover_by_role() {
+        let mut msg = make_message("pull_request", 43, &[]);
+        msg.metadata.insert(
+            "handover_role".to_string(),
+            serde_json::json!("developer"),
+        );
+        let patterns = make_patterns();
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().pattern_name, "developer");
+    }
+
+    #[test]
+    fn test_match_handover_case_insensitive() {
+        let mut msg = make_message("issue", 42, &[]);
+        msg.metadata.insert(
+            "handover_role".to_string(),
+            serde_json::json!("Reviewer"),
+        );
+        let patterns = make_patterns();
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().pattern_name, "reviewer");
+    }
+
+    #[test]
+    fn test_match_handover_unknown_role_falls_through() {
+        // Unknown handover role falls through to normal matching.
+        // Issue with jyc:plan label → matches planner via normal matching.
+        let mut msg = make_message("issue", 42, &["jyc:plan"]);
+        msg.metadata.insert(
+            "handover_role".to_string(),
+            serde_json::json!("unknown_role"),
+        );
+        let patterns = make_patterns();
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().pattern_name, "planner");
+    }
+
+    #[test]
+    fn test_match_handover_unknown_role_no_label_no_match() {
+        // Unknown handover role falls through. Issue without label → no match.
+        let mut msg = make_message("issue", 42, &[]);
+        msg.metadata.insert(
+            "handover_role".to_string(),
+            serde_json::json!("unknown_role"),
+        );
+        let patterns = make_patterns();
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_match_handover_bypasses_labels() {
+        // Hand-over should match even without the routing label on the PR
+        let mut msg = make_message("pull_request", 43, &[]);
+        msg.metadata.insert(
+            "handover_role".to_string(),
+            serde_json::json!("reviewer"),
+        );
+        let patterns = make_patterns();
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().pattern_name, "reviewer");
+    }
+
+    // --- Self-loop prevention ---
+
+    #[test]
+    fn test_self_loop_developer_comment_skips_developer() {
+        // [Developer] comment on a PR with jyc:develop label
+        // Should NOT match developer (self-loop), should have no match
+        // since reviewer requires jyc:review label which is not present
+        let mut msg = make_message("pull_request", 43, &["jyc:develop"]);
+        msg.metadata.insert(
+            "comment_role".to_string(),
+            serde_json::json!("Developer"),
+        );
+        let patterns = make_patterns();
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_self_loop_reviewer_comment_skips_reviewer() {
+        // [Reviewer] comment on a PR with jyc:review label
+        // Should NOT match reviewer (self-loop)
+        let mut msg = make_message("pull_request", 43, &["jyc:review"]);
+        msg.metadata.insert(
+            "comment_role".to_string(),
+            serde_json::json!("Reviewer"),
+        );
+        let patterns = make_patterns();
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_cross_role_reviewer_comment_matches_developer() {
+        // [Reviewer] comment on a PR with BOTH jyc:develop and jyc:review labels
+        // Should skip reviewer (self-loop) but match developer
+        let mut msg = make_message("pull_request", 43, &["jyc:develop", "jyc:review"]);
+        msg.metadata.insert(
+            "comment_role".to_string(),
+            serde_json::json!("Reviewer"),
+        );
+        let patterns = make_patterns();
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().pattern_name, "developer");
+    }
+
+    #[test]
+    fn test_cross_role_developer_comment_matches_reviewer() {
+        // [Developer] comment on a PR with BOTH jyc:develop and jyc:review labels
+        // Should skip developer (self-loop) but match reviewer
+        let mut msg = make_message("pull_request", 43, &["jyc:develop", "jyc:review"]);
+        msg.metadata.insert(
+            "comment_role".to_string(),
+            serde_json::json!("Developer"),
+        );
+        let patterns = make_patterns();
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().pattern_name, "reviewer");
+    }
+
+    #[test]
+    fn test_human_comment_no_self_loop_check() {
+        // Human comment (no comment_role) on PR with jyc:develop label
+        // Should match developer normally
+        let msg = make_message("pull_request", 43, &["jyc:develop"]);
+        let patterns = make_patterns();
+        let result = GithubMatcher.match_message(&msg, &patterns);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().pattern_name, "developer");
+    }
+
+    // --- Helper function tests ---
+
+    #[test]
+    fn test_extract_handover_role() {
+        assert_eq!(
+            extract_handover_role("@jyc:developer Please implement this"),
+            Some("developer".to_string())
+        );
+        assert_eq!(
+            extract_handover_role("@jyc:Reviewer Ready for review"),
+            Some("reviewer".to_string())
+        );
+        assert_eq!(
+            extract_handover_role("Normal comment without marker"),
+            None
+        );
+        assert_eq!(
+            extract_handover_role("Some text @jyc:planner more text"),
+            Some("planner".to_string())
+        );
+        // Role prefix [Planner] is NOT a handover marker
+        assert_eq!(
+            extract_handover_role("[Planner] This is a reply"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_comment_role() {
+        assert_eq!(extract_comment_role("[Developer] some text"), Some("Developer".to_string()));
+        assert_eq!(extract_comment_role("[Reviewer] code looks good"), Some("Reviewer".to_string()));
+        assert_eq!(extract_comment_role("[Planner] questions"), Some("Planner".to_string()));
+        assert_eq!(extract_comment_role("normal comment"), None);
+        assert_eq!(extract_comment_role("[Unknown] something"), None);
+        assert_eq!(extract_comment_role(""), None);
+        assert_eq!(extract_comment_role("no bracket prefix"), None);
+    }
+
+    #[test]
+    fn test_role_to_routing_label() {
+        assert_eq!(role_to_routing_label("Developer"), Some("jyc:develop"));
+        assert_eq!(role_to_routing_label("developer"), Some("jyc:develop"));
+        assert_eq!(role_to_routing_label("Reviewer"), Some("jyc:review"));
+        assert_eq!(role_to_routing_label("reviewer"), Some("jyc:review"));
+        assert_eq!(role_to_routing_label("Planner"), Some("jyc:plan"));
+        assert_eq!(role_to_routing_label("planner"), Some("jyc:plan"));
+        assert_eq!(role_to_routing_label("Unknown"), None);
+        assert_eq!(role_to_routing_label(""), None);
+    }
+
+    // --- Build trigger message ---
 
     #[test]
     fn test_build_trigger_message() {
@@ -800,95 +1161,5 @@ mod tests {
         let text = msg.content.text.unwrap();
         assert!(text.contains("gh pr view 43"));
         assert!(text.contains("gh pr diff 43"));
-    }
-
-    #[test]
-    fn test_extract_handover_role() {
-        assert_eq!(
-            extract_handover_role("@jyc:developer Please implement this"),
-            Some("developer".to_string())
-        );
-        assert_eq!(
-            extract_handover_role("@jyc:Reviewer Ready for review"),
-            Some("reviewer".to_string())
-        );
-        assert_eq!(
-            extract_handover_role("Normal comment without marker"),
-            None
-        );
-        assert_eq!(
-            extract_handover_role("Some text @jyc:planner more text"),
-            Some("planner".to_string())
-        );
-        // Role prefix [Planner] is NOT a handover marker
-        assert_eq!(
-            extract_handover_role("[Planner] This is a reply"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_match_handover_by_role() {
-        let mut msg = make_message("pull_request", 43, &[]);
-        msg.metadata.insert(
-            "handover_role".to_string(),
-            serde_json::json!("developer"),
-        );
-        let patterns = make_patterns();
-        let result = GithubMatcher.match_message(&msg, &patterns);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().pattern_name, "developer");
-    }
-
-    #[test]
-    fn test_match_handover_case_insensitive() {
-        let mut msg = make_message("issue", 42, &[]);
-        msg.metadata.insert(
-            "handover_role".to_string(),
-            serde_json::json!("Reviewer"),
-        );
-        let patterns = make_patterns();
-        let result = GithubMatcher.match_message(&msg, &patterns);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().pattern_name, "reviewer");
-    }
-
-    #[test]
-    fn test_match_handover_unknown_role_falls_through() {
-        let mut msg = make_message("issue", 42, &[]);
-        msg.metadata.insert(
-            "handover_role".to_string(),
-            serde_json::json!("unknown_role"),
-        );
-        let patterns = make_patterns();
-        // Falls through to normal matching → matches "planner" (github_type=issue)
-        let result = GithubMatcher.match_message(&msg, &patterns);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().pattern_name, "planner");
-    }
-
-    #[test]
-    fn test_derive_thread_name_reviewer() {
-        let msg = make_message("pull_request", 43, &[]);
-        let pm = PatternMatch {
-            pattern_name: "reviewer".to_string(),
-            channel: "github".to_string(),
-            matches: HashMap::new(),
-        };
-        let name = GithubMatcher.derive_thread_name(&msg, &[], Some(&pm));
-        assert_eq!(name, "review-pr-43");
-    }
-
-    #[test]
-    fn test_derive_thread_name_developer() {
-        let msg = make_message("pull_request", 43, &[]);
-        let pm = PatternMatch {
-            pattern_name: "developer".to_string(),
-            channel: "github".to_string(),
-            matches: HashMap::new(),
-        };
-        let name = GithubMatcher.derive_thread_name(&msg, &[], Some(&pm));
-        // Developer uses pr-{N}, not review-pr-{N}
-        assert_eq!(name, "pr-43");
     }
 }

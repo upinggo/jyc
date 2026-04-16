@@ -6,6 +6,23 @@ All notable changes to JYC will be documented in this file.
 
 ### Added
 
+**GitHub Label-Based Routing** — Auto-label matching for GitHub channel patterns
+- Patterns with a `role` field get an implicit routing label: `Developer` → `jyc:develop`, `Reviewer` → `jyc:review`, `Planner` → `jyc:plan`
+- Auto-label is combined (OR) with any explicit `labels` in pattern config
+- PRs/issues must have the matching label to be routed (labels added by agents during hand-off)
+
+### Changed
+
+**GitHub Self-Loop Prevention** — Replaces global `[Role]` prefix filter
+- Previously: ALL comments prefixed with `[Planner]`, `[Developer]`, or `[Reviewer]` were globally filtered (invisible to all patterns)
+- Now: each pattern only skips comments from its **own** role. `[Developer]` comments are visible to the reviewer pattern, and vice versa
+- Enables cross-agent feedback visibility (reviewer feedback triggers developer)
+
+**GitHub Agent Templates** — Updated hand-off workflow with routing labels
+- Planner: adds `--label "jyc:develop"` when creating PRs
+- Developer: adds `jyc:review` label when handing off to reviewer
+- Reviewer: adds `jyc:develop` label when requesting changes from developer
+
 **Developer-Reviewer Handoff** — Improved workflow for requesting changes
 - Reviewer template now explicitly triggers `@jyc:developer` when submitting review with request-changes
 - Ensures developer is notified when feedback needs to be addressed

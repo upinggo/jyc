@@ -65,9 +65,10 @@ git add . && git commit -m "feat: <description>" && git push
 ```
 
 ### 4. When Done — Request Review
-Comment on the SAME PR with `@jyc:reviewer` to trigger the reviewer agent:
+Add the `jyc:review` label and comment on the SAME PR with `@jyc:reviewer` to trigger the reviewer agent:
 ```bash
 cd repo
+gh pr edit <number> --add-label "jyc:review"
 gh pr comment <number> --body "@jyc:reviewer Implementation complete. Ready for review."
 ```
 
@@ -87,7 +88,7 @@ gh pr comment <number> --body "@jyc:reviewer Feedback addressed. Please re-revie
 - ALWAYS push to the existing PR branch — NEVER create a new branch or PR
 - Use `gh` CLI for ALL GitHub operations
 - ALWAYS read the PR spec before implementing
-- ALWAYS use `@jyc:reviewer` to hand over to the reviewer
+- ALWAYS add label `jyc:review` and use `@jyc:reviewer` to hand over to the reviewer
 - Commit frequently with clear messages
 - Do NOT create new PRs — the PR already exists
 - Do NOT create new branches — the PR branch already exists

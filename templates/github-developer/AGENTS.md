@@ -68,6 +68,7 @@ git add . && git commit -m "feat: <description>" && git push
 Add the `jyc:review` label and comment on the SAME PR with `@jyc:reviewer` to trigger the reviewer agent:
 ```bash
 cd repo
+gh label create "jyc:review" --description "Route to reviewer agent" --color "1D76DB" 2>/dev/null || true
 gh pr edit <number> --add-label "jyc:review"
 gh pr comment <number> --body "@jyc:reviewer Implementation complete. Ready for review."
 ```

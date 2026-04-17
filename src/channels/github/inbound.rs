@@ -411,14 +411,16 @@ impl GithubInboundAdapter {
         // to avoid duplicate triggers in the same poll cycle.
         let mut commented_issues: HashSet<u64> = HashSet::new();
 
-        // 1. Fetch open issues/PRs FIRST to populate the cache.
-        // Comments (step 2) need the cache to look up labels and github_type.
-        // Without this, comments after a restart would have empty labels and fail to match.
-        let issues = client.list_issues_since(&poll_start).await?;
+        // 1. Fetch ALL open issues/PRs to populate the cache and detect closures.
+        // We fetch the complete set (not just recently-updated) so cache comparison
+        // for close detection is reliable. Issues that weren't updated recently
+        // must still appear in the open set — otherwise they'd be falsely detected
+        // as closed.
+        let issues = client.list_all_open_issues().await?;
         tracing::trace!(
             channel = %self.channel_name,
             count = issues.len(),
-            "Fetched open issues/PRs"
+            "Fetched all open issues/PRs"
         );
 
         // Pre-compute issue routing data (label changes, new issues) before processing.
@@ -464,11 +466,19 @@ impl GithubInboundAdapter {
 
             let is_newly_created = issue.created_at > poll_start;
 
-            // Update cache (used by comment processing in step 2)
+            // Update cache for ALL open issues (used by close detection in step 3
+            // and comment routing in step 2)
             issue_cache.insert(
                 issue.number,
                 (issue.title.clone(), github_type.to_string(), labels.clone(), assignees.clone()),
             );
+
+            // Only route issues updated since last poll (avoid flooding on startup
+            // when we fetch the full open set for cache/close detection)
+            let is_recently_updated = issue.updated_at >= poll_start;
+            if !is_recently_updated {
+                continue;
+            }
 
             issue_route_infos.push(IssueRouteInfo {
                 number: issue.number,
@@ -706,9 +716,10 @@ impl GithubInboundAdapter {
             }
         }
 
-        // 3. Detect closed issues/PRs by comparing with previous cache.
-        // Strategy: if an issue was in the previous cache but not in current open list,
-        // it was closed since the last poll.
+        // 3. Detect closed issues/PRs by comparing cache with full open set.
+        // Since we fetched ALL open issues (not just recently-updated ones),
+        // the comparison is reliable: if an issue was in the cache but is not
+        // in the current open set, it was genuinely closed.
         //
         // Build set of current open issue numbers for comparison
         let current_open_numbers: HashSet<u64> = issues.iter().map(|i| i.number).collect();

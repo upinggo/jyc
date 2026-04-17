@@ -8,19 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pandoc python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# s6-overlay for process supervision
-ARG S6_OVERLAY_VERSION=3.1.6.2
-RUN curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz" -o /tmp/s6-overlay-noarch.tar.xz && \
-    tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz && rm /tmp/s6-overlay-noarch.tar.xz
-RUN ARCH=$(uname -m) && \
-    case "$ARCH" in \
-      x86_64) S6_ARCH=x86_64 ;; \
-      aarch64|arm64) S6_ARCH=aarch64 ;; \
-      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
-    esac && \
-    curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" -o /tmp/s6-overlay-arch.tar.xz && \
-    tar -C / -Jxpf /tmp/s6-overlay-arch.tar.xz && rm /tmp/s6-overlay-arch.tar.xz
-
 # Install OpenCode
 RUN curl -fsSL https://opencode.ai/install | bash \
     && ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode
@@ -38,10 +25,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Shared setup: s6 service, directories, workdir, volumes, entrypoint
-COPY docker/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
-RUN touch /etc/s6-overlay/s6-rc.d/user/contents.d/jyc
-
+# Directories and workdir
 RUN mkdir -p /root/.claude/skills /root/.agents/skills \
     /root/.config/opencode /root/.config/gh \
     /root/.local/share/opencode \
@@ -50,8 +34,6 @@ RUN mkdir -p /root/.claude/skills /root/.agents/skills \
 WORKDIR /opt/jyc
 
 VOLUME ["/opt/jyc", "/root/.config/opencode", "/root/.claude/skills", "/root/.agents/skills"]
-
-ENTRYPOINT ["/init"]
 
 # ── Stage 2: Build jyc (changes when source changes) ─────────────────
 FROM rust:bookworm AS builder

@@ -1,6 +1,6 @@
 ---
 name: jyc-deploy-docker
-description: Build and deploy jyc in Docker container using s6 process supervisor. Use when instructed to build, deploy, or build-and-deploy jyc.
+description: Build and deploy jyc in Docker container. Use when instructed to build, deploy, or build-and-deploy jyc.
 ---
 
 IMPORTANT: The JYC source repository is at ./jyc/ relative to your working directory.

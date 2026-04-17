@@ -1,12 +1,11 @@
 # JYC Docker Deployment
 
-Run JYC as a containerized service with process supervision via s6-overlay.
+Run JYC as a containerized service.
 
 ## Architecture
 
 - **Multi-stage build**: `base` (shared tools) → `builder` (Rust compile) → `production`
 - **Single binary**: `jyc` (the MCP reply tool is a hidden subcommand `jyc mcp-reply-tool`).
-- **s6-overlay**: Process supervision — automatically restarts JYC if it crashes.
 - **Host networking**: Container shares host network (`network_mode: host`), so services on `localhost` are accessible from inside the container.
 
 ## Included Tools
@@ -94,10 +93,6 @@ podman logs -f jyc
 ### 4. Restart the service
 
 ```bash
-# From inside the container:
-s6-svc -r /run/service/jyc
-
-# From outside:
 docker compose restart jyc
 ```
 
@@ -126,9 +121,9 @@ volumes:
 ## Troubleshooting
 
 ### Container starts but JYC doesn't run
-Check s6 service logs:
+Check container logs:
 ```bash
-docker exec -it jyc cat /var/log/s6-current/jyc
+docker compose logs -f jyc
 ```
 
 ### OpenCode not found

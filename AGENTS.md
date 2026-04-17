@@ -8,7 +8,7 @@ and uses OpenCode to generate AI replies.
 - Rust, tokio async runtime
 - IMAP/SMTP for email channels
 - OpenCode as the AI backend
-- s6-overlay for Docker process supervision
+- Docker for containerized deployment
 
 ## Code Conventions
 - Use `tracing` for all logging (never `println!`)

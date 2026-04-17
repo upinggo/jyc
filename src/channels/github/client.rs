@@ -137,32 +137,52 @@ impl GithubClient {
             .context("Failed to parse user response")
     }
 
-    /// List open issues and PRs updated since a given timestamp.
+    /// List ALL open issues and PRs (paginated, no `since` filter).
     ///
-    /// Returns both issues and PRs (GitHub API treats PRs as issues).
-    /// Use `GithubIssue::is_pull_request()` to distinguish.
-    pub async fn list_issues_since(&self, since: &str) -> Result<Vec<GithubIssue>> {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/issues?state=open&since={}&sort=updated&direction=asc&per_page=100",
-            self.owner, self.repo, since
-        );
+    /// Unlike `list_issues_since`, this returns the complete set of open issues
+    /// regardless of when they were last updated. Used for cache comparison
+    /// to reliably detect close events.
+    ///
+    /// Fetches up to 500 issues (5 pages × 100). Repos with more than 500
+    /// open issues will miss some, but this covers the vast majority of cases.
+    pub async fn list_all_open_issues(&self) -> Result<Vec<GithubIssue>> {
+        let mut all_issues = Vec::new();
+        let max_pages = 5;
 
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to fetch issues")?;
+        for page in 1..=max_pages {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/issues?state=open&sort=updated&direction=desc&per_page=100&page={}",
+                self.owner, self.repo, page
+            );
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GET issues failed: {} — {}", status, truncate_str(&body, 200));
+            let resp = self
+                .client
+                .get(&url)
+                .send()
+                .await
+                .context("Failed to fetch all open issues")?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                anyhow::bail!("GET all open issues failed: {} — {}", status, truncate_str(&body, 200));
+            }
+
+            let issues: Vec<GithubIssue> = resp
+                .json()
+                .await
+                .context("Failed to parse all open issues response")?;
+
+            let count = issues.len();
+            all_issues.extend(issues);
+
+            // If we got fewer than 100, we've reached the last page
+            if count < 100 {
+                break;
+            }
         }
 
-        resp.json::<Vec<GithubIssue>>()
-            .await
-            .context("Failed to parse issues response")
+        Ok(all_issues)
     }
 
     /// List comments on issues/PRs since a given timestamp.

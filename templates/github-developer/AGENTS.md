@@ -71,7 +71,7 @@ Do NOT use the reply tool for your final message. Your final action MUST be:
 ```bash
 cd repo
 gh label create "jyc:review" --description "Route to reviewer agent" --color "1D76DB" 2>/dev/null || true
-gh pr edit <number> --add-label "jyc:review"
+gh api repos/{owner}/{repo}/issues/<number>/labels --method POST -f 'labels[]=jyc:review'
 gh pr comment <number> --body "@jyc:reviewer Implementation complete. Ready for review."
 ```
 **CRITICAL:** Do NOT skip this step. Do NOT replace it with a reply/summary comment.

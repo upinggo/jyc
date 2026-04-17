@@ -45,6 +45,18 @@ pub fn extract_domain(email: &str) -> Option<String> {
         .map(|(_, domain)| domain.to_lowercase())
 }
 
+/// Safely truncate a string to at most `max_bytes` bytes, respecting UTF-8 char boundaries.
+///
+/// This prevents panics when truncating strings containing multi-byte characters
+/// (e.g., Chinese, emoji) where a simple slice like `&s[..80]` might split a character.
+pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let boundary = s.floor_char_boundary(max_bytes);
+    &s[..boundary]
+}
+
 /// Sanitize a string for use as a filesystem directory name.
 ///
 /// Removes or replaces characters that are unsafe in filenames.
@@ -86,6 +98,35 @@ pub fn sanitize_for_filesystem(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_truncate_str_ascii() {
+        assert_eq!(truncate_str("hello world", 100), "hello world");
+        assert_eq!(truncate_str("hello world", 5), "hello");
+        assert_eq!(truncate_str("hello world", 0), "");
+    }
+
+    #[test]
+    fn test_truncate_str_multibyte() {
+        let chinese = "我的问题是，close event 通常情况下没有被接收";
+        assert_eq!(truncate_str(chinese, 0), "");
+        assert_eq!(truncate_str(chinese, 3), "我");
+        assert_eq!(truncate_str(chinese, 6), "我的");
+        assert_eq!(
+            truncate_str(chinese, 80),
+            "我的问题是，close event 通常情况下没有被接收"
+        );
+        let shorter = "我的问题是";
+        assert_eq!(truncate_str(shorter, 5), "我");
+    }
+
+    #[test]
+    fn test_truncate_str_boundary() {
+        let s = "我的问题";
+        let truncated = truncate_str(s, 4);
+        assert_eq!(truncated, "我");
+        assert!(truncated.is_char_boundary(truncated.len()));
+    }
 
     #[test]
     fn test_parse_file_size_bytes() {

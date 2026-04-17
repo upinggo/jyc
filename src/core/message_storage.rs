@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::channels::types::InboundMessage;
 use crate::config::types::InboundAttachmentConfig;
+use crate::utils::helpers::truncate_str;
 
 /// Result of storing a message.
 #[derive(Debug, Clone)]
@@ -243,7 +244,8 @@ fn sanitize_attachment_filename(filename: &str) -> String {
             .extension()
             .map(|e| format!(".{}", e.to_string_lossy()))
             .unwrap_or_default();
-        let stem = &cleaned[..200 - ext.len().min(200)];
+        let max_stem_len = 200 - ext.len().min(200);
+        let stem = truncate_str(&cleaned, max_stem_len);
         format!("{stem}{ext}")
     } else if cleaned.is_empty() {
         "unnamed".to_string()

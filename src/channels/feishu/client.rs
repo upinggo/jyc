@@ -12,6 +12,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use super::config::FeishuConfig;
+use crate::utils::helpers::truncate_str;
 
 /// Feishu client errors.
 #[derive(Debug, Error)]
@@ -461,7 +462,7 @@ impl FeishuClient {
             let body_str = String::from_utf8_lossy(&file_bytes);
             anyhow::bail!(
                 "Feishu file download returned error instead of file data: {}",
-                &body_str[..body_str.len().min(200)]
+                truncate_str(&body_str, 200)
             );
         }
 
@@ -527,7 +528,7 @@ impl FeishuClient {
             anyhow::bail!(
                 "Feishu image download failed (HTTP {}): {}",
                 status,
-                &body_str[..body_str.len().min(300)]
+                truncate_str(&body_str, 300)
             );
         }
 

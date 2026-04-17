@@ -8,6 +8,7 @@ use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT}
 use serde::Deserialize;
 
 use super::config::GithubConfig;
+use crate::utils::helpers::truncate_str;
 
 /// GitHub API client.
 pub struct GithubClient {
@@ -128,7 +129,7 @@ impl GithubClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GET /user failed: {} — {}", status, &body[..body.len().min(200)]);
+            anyhow::bail!("GET /user failed: {} — {}", status, truncate_str(&body, 200));
         }
 
         resp.json::<GithubUser>()
@@ -156,7 +157,7 @@ impl GithubClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GET issues failed: {} — {}", status, &body[..body.len().min(200)]);
+            anyhow::bail!("GET issues failed: {} — {}", status, truncate_str(&body, 200));
         }
 
         resp.json::<Vec<GithubIssue>>()
@@ -183,7 +184,7 @@ impl GithubClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GET comments failed: {} — {}", status, &body[..body.len().min(200)]);
+            anyhow::bail!("GET comments failed: {} — {}", status, truncate_str(&body, 200));
         }
 
         resp.json::<Vec<GithubComment>>()
@@ -208,7 +209,7 @@ impl GithubClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GET closed issues failed: {} — {}", status, &body[..body.len().min(200)]);
+            anyhow::bail!("GET closed issues failed: {} — {}", status, truncate_str(&body, 200));
         }
 
         resp.json::<Vec<GithubIssue>>()
@@ -237,7 +238,7 @@ impl GithubClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("POST comment failed: {} — {}", status, &body[..body.len().min(200)]);
+            anyhow::bail!("POST comment failed: {} — {}", status, truncate_str(&body, 200));
         }
 
         #[derive(Deserialize)]

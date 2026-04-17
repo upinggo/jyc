@@ -8,6 +8,7 @@ use crate::channels::types::{
     ChannelMatcher, ChannelPattern, InboundAdapter, InboundAdapterOptions, InboundMessage,
     MessageContent, PatternMatch,
 };
+use crate::utils::helpers::truncate_str;
 use super::client::GithubClient;
 use super::config::GithubConfig;
 
@@ -534,7 +535,7 @@ impl GithubInboundAdapter {
                     comment_id = comment.id,
                     issue_number = issue_number,
                     user = %comment.user.login,
-                    body_preview = %&comment.body[..comment.body.len().min(80)],
+                    body_preview = %truncate_str(&comment.body, 80),
                     "GitHub comment detected → routing to thread"
                 );
             }

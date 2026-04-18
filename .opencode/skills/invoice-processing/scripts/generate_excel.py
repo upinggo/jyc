@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
 """Generate invoices.xlsx from SQLite database."""
-import sys
 import os
 import shutil
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from openpyxl import load_workbook
 from db import get_invoices_by_month
 
-TEMPLATE_PATH = "template.xlsx"
+TEMPLATE_PATH = os.environ.get('INVOICE_TEMPLATE_PATH', 'template.xlsx')
 
 
 def generate_excel(month: str, output_path: str = None) -> str:
+    template_path = TEMPLATE_PATH
+    if not os.path.isabs(template_path):
+        template_path = os.path.join(os.getcwd(), template_path)
+
+    if not os.path.exists(template_path):
+        raise FileNotFoundError(
+            f"Template file not found: {template_path}. "
+            "Please ensure template.xlsx exists in the working directory."
+        )
+
     if not output_path:
         output_path = f"invoice_{month}/invoices.xlsx"
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    shutil.copy(TEMPLATE_PATH, output_path)
+    shutil.copy(template_path, output_path)
 
     wb = load_workbook(output_path)
     ws = wb.active

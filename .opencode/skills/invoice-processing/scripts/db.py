@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """SQLite database operations for invoice processing."""
+import os
 import sqlite3
 from typing import Optional, List, Dict, Any
 
-DB_PATH = "invoices.db"
+DB_PATH = os.environ.get('INVOICES_DB_PATH', 'invoices.db')
 
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    db_path = DB_PATH
+    if not os.path.isabs(db_path):
+        db_path = os.path.join(os.getcwd(), DB_PATH)
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 

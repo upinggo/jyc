@@ -102,6 +102,7 @@ Code looks good. Approved.
 - <any minor notes>
 EOF
 )"
+gh issue edit <number> --remove-label "jyc:review" 2>/dev/null || true
 ```
 
 ## Rules
@@ -117,3 +118,4 @@ EOF
 - Do NOT use the `jyc_question_ask_user` tool
 - Be constructive and objective in feedback
 - When requesting changes, ALWAYS remove label `jyc:review`, then add label `jyc:develop` — labels are how routing works
+- When approving, ALWAYS remove label `jyc:review` — otherwise you will be triggered again on the same PR

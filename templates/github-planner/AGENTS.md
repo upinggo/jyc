@@ -97,7 +97,16 @@ understanding the codebase is useless.
 **If the user has NOT given explicit approval, just reply with your analysis
 and wait. Do NOT assume the user wants you to create a PR.**
 
-When the user gives explicit approval, create an empty PR with a detailed specification:
+When the user gives explicit approval, create an empty PR with a **detailed, step-by-step implementation plan**.
+
+**The implementation plan is the most important part of your job.** Each step must be:
+- **Small and focused** — one logical change per step
+- **Ordered** — later steps can depend on earlier ones
+- **Testable** — each step describes how the developer can verify it works
+- **Specific** — reference exact file paths, function names, types, and modules
+
+Use your codebase analysis to write concrete steps, not vague descriptions.
+
 ```bash
 cd repo
 git checkout main && git pull
@@ -112,16 +121,28 @@ gh label create "jyc:develop" --description "Route to developer agent" --color "
 gh pr create --title "feat: <description>" --label "jyc:develop" --body "$(cat <<'EOF'
 ## Spec
 
-<detailed specification based on the discussion>
-
-## Requirements
-- <requirement 1>
-- <requirement 2>
-
-## Implementation Notes
-- <any design decisions or constraints discussed>
+<one-paragraph summary of what this PR achieves>
 
 Fixes #<issue_number>
+
+## Implementation Plan
+
+### Step 1: <short title>
+**What:** <what to do — reference specific files, structs, functions>
+**Why:** <why this step is needed>
+**Verify:** <how to verify — e.g. `cargo check`, `cargo test <test_name>`, run a command, check output>
+
+### Step 2: <short title>
+**What:** <...>
+**Why:** <...>
+**Verify:** <...>
+
+### Step 3: <short title>
+...
+(as many steps as needed)
+
+## Design Decisions
+- <any constraints, trade-offs, or conventions discussed>
 
 @jyc:developer
 EOF
@@ -132,6 +153,7 @@ EOF
 **CRITICAL:** Include `--label "jyc:develop"` to route the PR to the Developer agent.
 **CRITICAL:** Include `@jyc:developer` in the PR body to trigger the Developer agent.
 **CRITICAL:** Include `Fixes #<issue_number>` to link the PR to the issue.
+**CRITICAL:** The implementation plan must have concrete, testable steps — NOT vague bullet points.
 
 ### 5. After Hand-over
 - Reply on the issue confirming the PR was created
@@ -150,3 +172,5 @@ EOF
 - ALWAYS include `@jyc:developer` in PR body
 - Reply in the same language as the user
 - Your PR must contain ZERO code changes — only the spec in the PR body
+- Your implementation plan must break the work into small, ordered steps — each with a clear verification method
+- NEVER write vague steps like "implement the feature" — always reference specific files, functions, and types

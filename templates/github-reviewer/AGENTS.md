@@ -41,6 +41,12 @@ gh pr view <number> --comments
 gh pr diff <number>
 ```
 
+**Review the commit history** — each commit should map to one step from the Implementation Plan:
+```bash
+cd repo
+git log main..HEAD --oneline
+```
+
 ### 2. Checkout for Deeper Analysis
 ```bash
 cd repo
@@ -66,6 +72,7 @@ Check for:
 - **Tests**: Are there tests? Do they cover the changes?
 - **Edge cases**: Missing error handling, boundary conditions
 - **Project conventions**: Does the code follow the project's own rules (from AGENTS.md etc.)?
+- **Commit structure**: Does each commit correspond to one step from the Implementation Plan? Are commit messages clear and descriptive? Flag commits that combine unrelated changes or skip steps.
 
 ### 5. Submit Review
 If changes needed:

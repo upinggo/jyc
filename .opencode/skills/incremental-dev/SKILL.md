@@ -54,11 +54,28 @@ After detection, you have three commands for the rest of this workflow:
 Break every task into the smallest possible steps. Each step must be:
 1. **Self-contained** — passes check and tests independently
 2. **Validated** — verified before moving to the next step
-3. **Approved** — user confirms before proceeding
+3. **Approved** — user confirms before proceeding (interactive mode only)
+
+### Modes of Operation
+
+**Interactive mode** (default — email, Feishu, direct user interaction):
+- Execute one step at a time
+- Send a reply after each step with results
+- STOP and WAIT for user approval before the next step
+
+**Autonomous mode** (GitHub developer agent — PR-based workflows):
+- Execute all steps sequentially without waiting for approval
+- Commit and push after each step (one commit per plan step)
+- Run check/test before each commit — fix issues before proceeding
+- Request review only after all steps are complete
+- The Implementation Plan from the PR spec defines the steps
+
+The mode is determined by the agent template. If you are a GitHub developer
+agent (AGENTS.md says "GitHub Developer Agent"), use autonomous mode.
 
 ### Implementation Flow
 
-For each step:
+For each step (interactive mode — wait for approval):
 
 ```
 1. Describe what this step will do (brief, 1-2 sentences)
@@ -72,6 +89,17 @@ For each step:
    - Test result (pass/fail)
    - What the next step will be
 7. STOP and WAIT for user approval before next step
+```
+
+For each step (autonomous mode — no approval needed):
+
+```
+1. Read the step's requirements from the plan
+2. Make the change
+3. Verify: {check_command} (no errors)
+4. Verify: {test_command} (all pass)
+5. Commit: git add -A && git commit -m "feat: step N - <step title>" && git push
+6. Proceed to next step immediately
 ```
 
 After ALL steps are complete:
@@ -90,9 +118,9 @@ validation. Full build only runs once at the end.
 - **ONE change per step** — do not combine multiple changes
 - **NEVER skip validation** — every step must pass check and test commands
 - **ALWAYS commit and push** — every step must be committed and pushed after validation
-- **NEVER proceed without approval** — wait for user to say "yes", "continue", "next", or similar
-- **If check fails** — fix it in the SAME step before reporting
-- **If tests fail** — fix them in the SAME step before reporting
+- **NEVER proceed without approval** — in interactive mode, wait for user to say "yes", "continue", "next", or similar. In autonomous mode, proceed immediately after validation passes.
+- **If check fails** — fix it in the SAME step before reporting/proceeding
+- **If tests fail** — fix them in the SAME step before reporting/proceeding
 - **Do NOT batch steps** — even if you know all the steps, execute one at a time
 - **Use the fast check command, not the full build** — full build only runs once at the end
 

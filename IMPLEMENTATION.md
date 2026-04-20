@@ -4,7 +4,7 @@
 
 This document outlines the phased implementation plan for building JYC, the Rust rewrite of jiny-m. Each phase produces a testable, functional increment. Phases are ordered by dependency — later phases build on earlier ones.
 
-**Estimated total: ~35 implementation tasks across 6 phases.**
+**Estimated total: ~50+ implementation tasks across 10 phases.**
 
 ---
 
@@ -326,7 +326,82 @@ websocket.reconnect_delay_ms = 5000
 
 ✅ **Completed** - All Feishu channel features are implemented and tested
 ✅ **Integrated** - Fully integrated with core JYC architecture
-✅ **Production Ready** - Passes all 115 tests in the test suite
+✅ **Production Ready** - Passes all 265 tests in the test suite
 ✅ **Documented** - Comprehensive documentation in DESIGN.md
 
 The Feishu channel implementation demonstrates the extensibility of JYC's channel-agnostic architecture and provides a blueprint for adding additional messaging platforms in the future.
+
+---
+
+## Phase 8: Post-1.0 Enhancements (v0.1.1 — v0.1.9)
+
+**Goal:** Improve session management, add MCP tools, enhance thread lifecycle, and support invoice processing.
+
+### Key Features
+
+| # | Feature | Version | Description |
+|---|---------|---------|-------------|
+| 8.1 | Chat log storage | v0.1.1 | Unified daily log files (`chat_history_YYYY-MM-DD.md`) with HTML comment metadata |
+| 8.2 | Token-based session management | v0.1.3 | Replace time-based sessions with input token counting. Reset when approaching context limit. |
+| 8.3 | Vision MCP tool | v0.1.5 | `analyze_image` tool for image analysis via OpenAI-compatible vision APIs |
+| 8.4 | Unified attachment config | v0.1.5 | Global `[attachments]` config section for all channels |
+| 8.5 | Thread name override | v0.1.7 | `thread_name` field on `ChannelPattern` for fixed thread names |
+| 8.6 | Thread templates | v0.1.7 | Initialize new threads with predefined files from `templates/` |
+| 8.7 | MCP question tool | v0.1.8 | `ask_user` tool — send question, wait for reply (up to 5 min) |
+| 8.8 | Pending delivery watcher | v0.1.8 | Background task delivers MCP reply tool messages during SSE processing |
+| 8.9 | Thread close/cleanup | v0.1.8 | `/close` command, Feishu `chat.disbanded` event, `on_thread_close` callback |
+| 8.10 | Invoice processing skill | v0.1.8 | Chinese invoice extraction, SQLite storage, Excel template |
+| 8.11 | Central path resolution | v0.1.8 | `thread_path.rs` — unified path derivation for all thread-related files |
+| 8.12 | Live message injection toggle | v0.1.9 | `live_injection` field on `ChannelPattern` (default: true) |
+
+### Status
+
+✅ **Completed** — All features implemented, tested, and in production
+
+---
+
+## Phase 9: GitHub Channel (v0.1.10)
+
+**Goal:** Full GitHub channel with multi-agent workflow on issues and PRs.
+
+### Tasks
+
+| # | Task | Files | Description |
+|---|------|-------|-------------|
+| 9.1 | GitHub REST API client | `channels/github/client.rs` | List issues/PRs, list comments, post comments, get authenticated user. GitHub Enterprise support via configurable `api_url`. |
+| 9.2 | GitHub config | `channels/github/config.rs` | `GithubConfig`: owner, repo, token, api_url, poll_interval_secs |
+| 9.3 | GitHub inbound adapter | `channels/github/inbound.rs` | Polling-based inbound: fetch open issues, detect new/edited comments, detect close events. Persistent comment tracking with `id:updated_at` keys. |
+| 9.4 | GitHub outbound adapter | `channels/github/outbound.rs` | Post comments on issues/PRs with `[Role]` prefix |
+| 9.5 | Mention-driven routing | `channels/github/inbound.rs` | `@j:<role>` mention extraction, role-based pattern matching |
+| 9.6 | Self-loop prevention | `channels/github/inbound.rs` | Skip patterns where comment's `[Role]` prefix matches target role |
+| 9.7 | Pattern rule filtering | `channels/github/inbound.rs` | Enforce `github_type`, `labels`, `assignees` rules in `GithubMatcher::rules_match()` (AND/OR logic) |
+| 9.8 | Close detection | `channels/github/inbound.rs` | Detect closed issues by comparing cached open set; trigger thread cleanup |
+| 9.9 | Multi-agent templates | `templates/github-{planner,developer,reviewer}/` | Planner (analyze + create PR), Developer (implement), Reviewer (review + approve/reject) |
+| 9.10 | Planner: copy issue metadata to PR | `templates/github-planner/AGENTS.md` | Read assignees/labels from issue, copy to PR via `--assignee`/`--label` flags |
+| 9.11 | CLI patterns list enhancement | `cli/patterns.rs` | Display all rule fields: github_type, labels, assignees, mentions, keywords, chat_name, role, template |
+| 9.12 | Docker env injection | `docker/docker-compose.yml` | `env_file: .env` directive to propagate env vars into container |
+
+### Status
+
+✅ **Completed** — GitHub channel fully operational with multi-agent workflow
+✅ **Tested** — 265 tests pass (14 new tests for rule filtering)
+✅ **Documented** — DESIGN.md updated with GitHub channel section
+
+---
+
+## Phase 10: Bare Metal Deployment (v0.1.10)
+
+**Goal:** Deploy JYC on Ubuntu/Debian servers without Docker.
+
+### Tasks
+
+| # | Task | Files | Description |
+|---|------|-------|-------------|
+| 10.1 | Deployment script | `deploy.sh` | Automated deployment with systemd service or nohup fallback |
+| 10.2 | Bare metal setup | `deploy-bare-metal.sh` | Full server provisioning (Rust, OpenCode, GitHub CLI, Node.js) |
+| 10.3 | Template deployment | `deploy-templates.sh` | Sync templates to deployment target |
+| 10.4 | Environment config | `dotfiles/` | zsh config, OpenCode settings for server environments |
+
+### Status
+
+✅ **Completed** — Bare metal deployment tested on Ubuntu/Debian

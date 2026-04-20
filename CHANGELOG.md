@@ -40,6 +40,24 @@ All notable changes to JYC will be documented in this file.
 - `assignees` field on `ChannelPattern` for GitHub channel
 - Match issues/PRs where any of the specified users are assigned
 
+**Pattern Rule Filtering** — Enforce `github_type`, `labels`, `assignees` rules in routing
+- `GithubMatcher::match_message()` now validates all present rules before accepting a pattern match
+- All rules use AND logic (all must pass); within each rule, OR logic (any value suffices)
+- Case-insensitive matching for labels and assignees
+- Patterns that fail rule checks are skipped, allowing fallback to the next matching pattern
+
+**CLI Patterns List Enhancement** — Display all rule fields
+- `jyc patterns list` now shows GitHub rules (`github_type`, `labels`, `assignees`), Feishu rules (`mentions`, `keywords`, `chat_name`), `role`, and `template`
+
+**Planner Template: Copy Issue Metadata to PR** — Preserve routing context
+- Planner template reads assignees and labels from the source issue
+- Copies them to the created PR via `--assignee` and `--label` flags
+- Ensures PRs inherit routing context for developer/reviewer pattern matching
+
+**Docker Container Environment Injection** — Propagate `.env` to container
+- Added `env_file: .env` directive to `docker-compose.yml`
+- Environment variables from `.env` are now injected into the container runtime (previously only used for compose-file interpolation)
+
 **Close Event Detection** — Improved event handling
 - Fetch all open issues instead of `list_closed_since` for detecting close events
 - Compare cached state to detect actual closes

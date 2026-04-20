@@ -44,9 +44,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
-COPY src/ src/
-COPY config.example.toml ./
 
+RUN mkdir src && echo 'fn main() {}' > src/main.rs \
+    && cargo build --release
+
+RUN rm -rf src target/release/deps/jyc* target/release/jyc* target/release/.fingerprint/jyc*
+
+COPY src/ src/
 RUN cargo build --release
 
 # ── Stage 3: Production image ────────────────────────────────────────

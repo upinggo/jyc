@@ -30,22 +30,22 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 ### Architecture Block Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                  Inbound Channels (tokio tasks, run concurrently)        │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │
-│  │ Email Inbound│  │FeiShu Inbound│  │ Slack Inbound│ (future)         │
-│  │  (IMAP/TLS)  │  │ (WebSocket)  │  │  (WebHook)   │                  │
-│  │              │  │              │  │              │                  │
-│  │ match_message│  │ match_message│  │ match_message│                  │
-│  │ derive_thread│  │ derive_thread│  │ derive_thread│                  │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                  │
-└─────────┼──────────────────┼──────────────────┼────────────────────────┘
-          │                  │                  │
-          ▼                  ▼                  ▼
-    InboundMessage     InboundMessage     InboundMessage
-    (channel:"email")  (channel:"feishu") (channel:"slack")
-          │                  │                  │
-          └────────┬─────────┘──────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                       Inbound Channels (tokio tasks, run concurrently)                    │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                 │
+│  │ Email Inbound│  │FeiShu Inbound│  │GitHub Inbound│  │ Slack Inbound│ (future)        │
+│  │  (IMAP/TLS)  │  │ (WebSocket)  │  │ (REST poll)  │  │  (WebHook)   │                 │
+│  │              │  │              │  │              │  │              │                 │
+│  │ match_message│  │ match_message│  │ match_message│  │ match_message│                 │
+│  │ derive_thread│  │ derive_thread│  │ derive_thread│  │ derive_thread│                 │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                 │
+└─────────┼──────────────────┼──────────────────┼──────────────────┼───────────────────────┘
+          │                  │                  │                  │
+          ▼                  ▼                  ▼                  ▼
+    InboundMessage     InboundMessage     InboundMessage     InboundMessage
+    (channel:"email")  (channel:"feishu") (channel:"github") (channel:"slack")
+          │                  │                  │                  │
+          └────────┬─────────┘──────────────────┘──────────────────┘
                    ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                       MessageRouter                                      │
@@ -189,6 +189,7 @@ User sends message (any channel) → Pattern Match → Thread Queue → Worker (
 |---------|---------|----------|------|
 | Email | IMAP polling/IDLE | SMTP | DESIGN.md |
 | Feishu | WebSocket events | Feishu API | FEISHU.md |
+| GitHub | REST API polling | Issue/PR comments | DESIGN.md |
  7. **Thread Event Bus** — Thread-isolated event bus for publishing and subscribing to processing events (SSE → ThreadEvent conversion).
  8. **Thread Event System** — Heartbeat rhythm control: monitors processing progress and sends periodic updates (default every 10 minutes, configurable via `[heartbeat]` config section) via `send_heartbeat()`.
  9. **Prompt Builder** — Builds channel-agnostic prompts from InboundMessage
@@ -568,7 +569,190 @@ Comprehensive unit tests cover:
 - Error handling and recovery
 - Message formatting and parsing
 
-All Feishu channel tests pass as part of the 146 total tests in the test suite.
+All Feishu channel tests pass as part of the 265 total tests in the test suite.
+
+## GitHub Channel Implementation
+
+### Architecture Overview
+
+The GitHub channel enables multi-agent AI workflows on GitHub issues and pull requests. It uses a **polling-based** inbound adapter (GitHub REST API) and posts comments as the outbound mechanism.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     GitHub Channel Architecture                         │
+│                                                                         │
+│  ┌──────────────────┐         ┌──────────────────┐                     │
+│  │  GithubInbound   │         │  GithubOutbound   │                    │
+│  │  (REST polling)  │         │  (Comment poster)  │                   │
+│  │                  │         │                    │                    │
+│  │ poll_once():     │         │ send_reply():      │                   │
+│  │  list open issues│         │  post comment with │                   │
+│  │  list comments   │         │  [Role] prefix     │                   │
+│  │  detect @j:role  │         │                    │                   │
+│  │  detect closes   │         │ send_heartbeat():  │                   │
+│  │  detect edits    │         │  post progress     │                   │
+│  └────────┬─────────┘         └──────────┬─────────┘                   │
+│           │                              │                              │
+│  ┌────────▼─────────┐         ┌──────────▼─────────┐                   │
+│  │  GithubMatcher   │         │   GithubClient     │                   │
+│  │                  │         │  (REST API v3)      │                   │
+│  │ match_message(): │         │                    │                    │
+│  │  role matching   │         │  list_open_issues()│                    │
+│  │  self-loop check │         │  list_comments()   │                    │
+│  │  rules_match():  │         │  post_comment()    │                    │
+│  │   github_type    │         │  get_auth_user()   │                    │
+│  │   labels         │         │                    │                    │
+│  │   assignees      │         │                    │                    │
+│  └──────────────────┘         └────────────────────┘                   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Multi-Agent Workflow
+
+JYC supports a planner/developer/reviewer workflow on GitHub issues and PRs:
+
+```
+User creates issue
+    │
+    ├── @j:planner comment
+    │       ↓
+    │   [Planner] analyzes codebase, discusses with user
+    │   [Planner] creates empty PR with implementation plan
+    │   [Planner] posts @j:developer comment on PR
+    │       ↓
+    ├── @j:developer triggered on PR
+    │       ↓
+    │   [Developer] implements code per plan
+    │   [Developer] pushes commits, posts @j:reviewer comment
+    │       ↓
+    ├── @j:reviewer triggered on PR
+    │       ↓
+    │   [Reviewer] reviews code changes
+    │   [Reviewer] approves or requests changes via @j:developer
+    │       ↓
+    └── Cycle continues until PR is approved and merged
+```
+
+Each role maps to a pattern with a `role` field and a template that defines the agent's behavior. Templates are in `templates/github-{planner,developer,reviewer}/`.
+
+### Mention-Driven Routing
+
+Routing is driven by `@j:<role>` mentions in comments:
+
+1. **Detection**: `poll_once()` scans comments for the regex `@j:(\w+)` via `extract_mention_role()`
+2. **Metadata**: The extracted role is stored as `handover_role` in message metadata
+3. **Matching**: `GithubMatcher::match_message()` iterates patterns, matching `pattern.role` against `handover_role` (case-insensitive)
+4. **Self-loop prevention**: If the comment's `[Role]` prefix matches the target pattern's role, the pattern is skipped (prevents a `[Developer]` comment with `@j:developer` from re-triggering the developer)
+5. **Rule filtering**: After role matching, `rules_match()` validates `github_type`, `labels`, and `assignees` rules (AND logic between rules, OR logic within each rule)
+
+### Pattern Rule Filtering
+
+When a `@j:<role>` mention matches a pattern's role, the pattern's rules are additionally checked:
+
+```
+@j:developer detected → find patterns with role="Developer"
+    │
+    ├── Pattern "developer" (rules: github_type=["pull_request"], assignees=["alice"])
+    │       ↓
+    │   Check github_type: message is "pull_request" → ✓
+    │   Check assignees: PR assigned to "bob" → ✗
+    │   → SKIP (rules don't match)
+    │
+    ├── Pattern "developer-default" (rules: github_type=["pull_request"])
+    │       ↓
+    │   Check github_type: message is "pull_request" → ✓
+    │   No assignees rule → ✓
+    │   → MATCH
+    │
+    └── Route to thread with "developer-default" pattern
+```
+
+Rules:
+- **`github_type`**: `"issue"` or `"pull_request"` — OR logic within the list
+- **`labels`**: Match if ANY label on the issue/PR is in the pattern's label list — case-insensitive
+- **`assignees`**: Match if ANY assignee on the issue/PR is in the pattern's assignee list — case-insensitive
+- All present rules use **AND logic** (all must pass). `None` rules are considered matched.
+
+### Close Detection
+
+The adapter detects issue/PR close events by comparing cached state:
+
+1. Each poll cycle fetches all open issue/PR numbers
+2. Previously-open issues not in the current set are considered closed
+3. Closed threads trigger the `on_thread_close` callback (deletes thread directory)
+4. Fallback: `list_closed_since()` checks recently-closed issues as a backup
+
+### Persistent Comment Tracking
+
+Comments are tracked with composite keys (`{comment_id}:{updated_at}`) to detect edits:
+
+- New comment: key not in processed set → process and track
+- Edited comment: same ID but new `updated_at` → re-process
+- Compaction: when the set exceeds 5000 entries, keep only the 2000 highest IDs
+- Backward-compatible with legacy `processed-comments.txt` format (plain comment IDs)
+
+### Configuration
+
+```toml
+[channels.my_repo]
+type = "github"
+
+[channels.my_repo.github]
+owner = "kingye"
+repo = "jyc"
+token = "${GITHUB_TOKEN}"         # PAT scopes: repo, read:user
+api_url = "https://api.github.com"  # Default; set for GitHub Enterprise
+poll_interval_secs = 60           # Default: 60
+
+[[channels.my_repo.patterns]]
+name = "planner"
+enabled = true
+role = "Planner"
+template = "github-planner"
+
+[channels.my_repo.patterns.rules]
+github_type = ["issue"]
+
+[[channels.my_repo.patterns]]
+name = "developer"
+enabled = true
+role = "Developer"
+template = "github-developer"
+
+[channels.my_repo.patterns.rules]
+github_type = ["pull_request"]
+assignees = ["alice", "bob"]      # Optional: restrict to specific assignees
+
+[[channels.my_repo.patterns]]
+name = "reviewer"
+enabled = true
+role = "Reviewer"
+template = "github-reviewer"
+
+[channels.my_repo.patterns.rules]
+github_type = ["pull_request"]
+```
+
+### Thread Naming
+
+| GitHub Type | Pattern | Thread Name |
+|-------------|---------|-------------|
+| Issue | any | `issue-{N}` |
+| Pull Request | developer | `pr-{N}` |
+| Pull Request | reviewer | `review-pr-{N}` |
+
+The reviewer gets a separate thread prefix so developer and reviewer can work on the same PR concurrently without context collision.
+
+### Testing
+
+Comprehensive unit tests (14 tests for rule filtering alone) cover:
+- Mention-driven routing (role matching, case-insensitive, unknown role)
+- Self-loop prevention (own-role skip, cross-role pass)
+- Rule filtering (github_type, labels, assignees — AND/OR logic, case-insensitive)
+- Pattern fallback (skip first pattern on rule failure, match second)
+- Thread name derivation (issue, PR, reviewer prefix)
+- Persistent comment tracking (track, reload, edit detection, compaction)
+- Trigger message building (issue and PR variants)
 
 ## Core Types & Traits
 
@@ -723,11 +907,19 @@ pub struct ChannelPattern {
     pub enabled: bool,
     pub rules: PatternRules,
     pub attachments: Option<AttachmentConfig>,
+    pub template: Option<String>,             // Thread template name
+    pub thread_name: Option<String>,          // Fixed thread name override
+    pub role: Option<String>,                 // Agent role (e.g., "Planner", "Developer", "Reviewer")
+    #[serde(default = "default_true")]
+    pub live_injection: bool,                 // Inject into active AI session (default: true)
 }
 
 /// Channel-agnostic pattern matching rules.
 /// All present rules must match (AND logic).
-/// Each channel's ChannelMatcher only checks the fields relevant to it.
+/// Each channel's ChannelMatcher only checks the fields relevant to it:
+/// - Email checks: `sender`, `subject`
+/// - Feishu checks: `mentions`, `keywords`, `sender`, `chat_name`
+/// - GitHub checks: `github_type`, `labels`, `assignees`
 #[derive(Debug, Clone, Deserialize)]
 pub struct PatternRules {
     // --- Shared rules ---
@@ -739,6 +931,12 @@ pub struct PatternRules {
     // --- Feishu rules ---
     pub mentions: Option<Vec<String>>,        // @mention user/bot IDs or names (OR logic)
     pub keywords: Option<Vec<String>>,        // Keywords in message body (OR, case-insensitive)
+    pub chat_name: Option<Vec<String>>,       // Group chat names (OR, case-insensitive)
+
+    // --- GitHub rules ---
+    pub github_type: Option<Vec<String>>,     // Entity type: "issue" or "pull_request" (OR logic)
+    pub labels: Option<Vec<String>>,          // Labels to match (OR logic)
+    pub assignees: Option<Vec<String>>,       // Assignees to match (OR logic, case-insensitive)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -761,6 +959,7 @@ Each channel's `ChannelMatcher` implements `derive_thread_name(message, patterns
 
 - **Email**: Strip reply prefixes (Re:, Fwd:, 回复:, 转发:), strip configured subject prefix (e.g., "Jiny:"), sanitize for filesystem. Supports broad separator recognition (`:`, `-`, `_`, `~`, `|`, `/`, `&`, `$`, etc.)
 - **FeiShu**: Derive from chat name (via `get_chat_name` with caching) or message content
+- **GitHub**: `issue-{N}`, `pr-{N}`, or `review-pr-{N}` (for reviewer pattern). Thread name is derived from issue/PR number and type.
 - **Slack** (future): Derive from channel name + thread topic
 
 ## Async Event Queue Architecture
@@ -1812,13 +2011,15 @@ Events from `prompt_with_progress()` are logged with deduplication:
 
 ```
 jyc binary
-├── jyc monitor          ← main command
-├── jyc config init      ← config management
+├── jyc monitor            ← main command
+├── jyc config init        ← config management
 ├── jyc config validate
-├── jyc state            ← show monitoring state
-├── jyc patterns list    ← list patterns
-└── jyc mcp-reply-tool   ← hidden subcommand (MCP stdio server)
-                            spawned by OpenCode as subprocess
+├── jyc state              ← show monitoring state
+├── jyc patterns list      ← list patterns (shows all rule fields)
+├── jyc mcp-reply-tool     ← hidden subcommand (MCP stdio server)
+├── jyc mcp-vision-tool    ← hidden subcommand (vision analysis MCP server)
+└── jyc mcp-question-tool  ← hidden subcommand (ask_user MCP server)
+                              All MCP tools spawned by OpenCode as subprocesses
 ```
 
 The reply tool shares types with the main binary (same Rust crate), eliminating the type drift risk of the two-binary TypeScript approach.
@@ -2026,6 +2227,8 @@ pub struct AppConfig {
     pub agent: AgentConfig,
     pub heartbeat: Option<HeartbeatConfig>,
     pub alerting: Option<AlertingConfig>,
+    pub attachments: Option<UnifiedAttachmentConfig>,  // Global attachment config
+    pub vision: Option<VisionConfig>,                  // Vision API config
 }
 
 #[derive(Debug, Deserialize)]
@@ -2039,13 +2242,15 @@ pub struct GeneralConfig {
 #[derive(Debug, Deserialize)]
 pub struct ChannelConfig {
     #[serde(rename = "type")]
-    pub channel_type: String,
-    pub inbound: Option<ImapConfig>,
-    pub outbound: Option<SmtpConfig>,
-    pub monitor: Option<MonitorConfig>,
+    pub channel_type: String,                          // "email", "feishu", "github"
+    pub inbound: Option<ImapConfig>,                   // Email inbound
+    pub outbound: Option<SmtpConfig>,                  // Email outbound
+    pub monitor: Option<MonitorConfig>,                // Email IMAP monitor
+    pub feishu: Option<FeishuConfig>,                  // Feishu channel config
+    pub github: Option<GithubConfig>,                  // GitHub channel config
     pub patterns: Option<Vec<ChannelPattern>>,
-    pub agent: Option<AgentConfig>,           // Channel-specific override
-    pub heartbeat_template: Option<String>,   // Per-channel heartbeat message template
+    pub agent: Option<AgentConfig>,                    // Channel-specific override
+    pub heartbeat_template: Option<String>,            // Per-channel heartbeat message template
 }
 
 #[derive(Debug, Deserialize)]
@@ -2269,9 +2474,11 @@ jyc/
 │   │   ├── mod.rs
 │   │   ├── monitor.rs                   # `jyc monitor` — wiring
 │   │   ├── config.rs                    # `jyc config init/validate`
-│   │   ├── patterns.rs                  # `jyc patterns list/add`
+│   │   ├── patterns.rs                  # `jyc patterns list` (all rule fields)
 │   │   ├── state.rs                     # `jyc state`
-│   │   └── mcp_reply.rs                 # `jyc mcp-reply-tool` (hidden)
+│   │   ├── mcp_reply.rs                 # `jyc mcp-reply-tool` (hidden)
+│   │   ├── mcp_vision.rs               # `jyc mcp-vision-tool` (hidden)
+│   │   └── mcp_question.rs             # `jyc mcp-question-tool` (hidden)
 │   ├── config/
 │   │   ├── mod.rs
 │   │   ├── types.rs                     # Config structs (serde + toml)
@@ -2282,27 +2489,40 @@ jyc/
 │   │   ├── registry.rs                  # ChannelRegistry
 │   │   ├── email/
 │   │   │   ├── mod.rs
-│   │   │   ├── config.rs               # Email-specific config
 │   │   │   ├── inbound.rs              # EmailInboundAdapter
 │   │   │   └── outbound.rs             # EmailOutboundAdapter
-│   │   └── feishu/
+│   │   ├── feishu/
+│   │   │   ├── mod.rs
+│   │   │   ├── client.rs               # Feishu API client (auth, token mgmt)
+│   │   │   ├── config.rs               # Feishu-specific config
+│   │   │   ├── inbound.rs              # FeishuInboundAdapter (WebSocket)
+│   │   │   ├── outbound.rs             # FeishuOutboundAdapter (API)
+│   │   │   ├── websocket.rs            # LarkWsClient (WebSocket connection)
+│   │   │   ├── types.rs                # Feishu event/message types
+│   │   │   ├── formatter.rs            # Message formatting (markdown/text)
+│   │   │   └── validator.rs            # Config & message validation
+│   │   └── github/
 │   │       ├── mod.rs
-│   │       ├── client.rs               # Feishu API client (auth, token mgmt)
-│   │       ├── config.rs               # Feishu-specific config
-│   │       ├── inbound.rs              # FeishuInboundAdapter (WebSocket)
-│   │       ├── outbound.rs             # FeishuOutboundAdapter (API)
-│   │       ├── websocket.rs            # LarkWsClient (WebSocket connection)
-│   │       ├── types.rs                # Feishu event/message types
-│   │       ├── formatter.rs            # Message formatting (markdown/text)
-│   │       └── validator.rs            # Config & message validation
+│   │       ├── client.rs               # GitHub REST API v3 client
+│   │       ├── config.rs               # GithubConfig (owner, repo, token, api_url)
+│   │       ├── inbound.rs              # GithubInboundAdapter (polling + matcher)
+│   │       └── outbound.rs             # GithubOutboundAdapter (comment poster)
 │   ├── core/
 │   │   ├── mod.rs
 │   │   ├── thread_manager.rs           # Per-thread queues + semaphore
+│   │   ├── thread_manager_tests.rs     # ThreadManager integration tests
+│   │   ├── thread_path.rs              # Central path resolution for threads
+│   │   ├── thread_event_bus.rs         # Thread-isolated event bus
+│   │   ├── thread_event.rs             # ThreadEvent types
 │   │   ├── message_router.rs           # Pattern match → dispatch
 │   │   ├── message_storage.rs          # Markdown file I/O
+│   │   ├── chat_log_store.rs           # Chat log storage (daily log files)
 │   │   ├── email_parser.rs             # Stripping, quoting, thread trail
 │   │   ├── state_manager.rs            # UID tracking, state persistence
 │   │   ├── alert_service.rs            # Error digests + health reports
+│   │   ├── attachment_storage.rs       # Channel-agnostic attachment saving
+│   │   ├── template_utils.rs           # Template file copying
+│   │   ├── pending_delivery.rs         # Background reply delivery watcher
 │   │   └── command/
 │   │       ├── mod.rs
 │   │       ├── registry.rs             # Command parsing + dispatch
@@ -2311,6 +2531,7 @@ jyc/
 │   │       ├── mode_handler.rs         # /plan, /build commands
 │   │       ├── reset_handler.rs        # /reset command
 │   │       ├── close_handler.rs        # /close command (thread cleanup)
+│   │       └── template_handler.rs     # /template command (re-apply template)
 │   ├── services/
 │   │   ├── mod.rs
 │   │   ├── agent.rs                   # AgentService trait (process → AgentResult)
@@ -2320,7 +2541,7 @@ jyc/
 │   │   │   ├── service.rs            # OpenCodeService implements AgentService
 │   │   │   ├── client.rs             # OpenCode HTTP + SSE client
 │   │   │   ├── session.rs            # Session + opencode.json + signal file management
-│   │   │   ├── prompt_builder.rs     # Prompt construction 
+│   │   │   ├── prompt_builder.rs     # Prompt construction
 │   │   │   └── types.rs              # API request/response + SSE event types
 │   │   ├── imap/
 │   │   │   ├── mod.rs
@@ -2331,14 +2552,16 @@ jyc/
 │   │       └── client.rs             # lettre SMTP, MD→HTML, file attachments
 │   ├── mcp/
 │   │   ├── mod.rs
-│   │   ├── reply_tool.rs             # rmcp stdio MCP server (reply_message tool)
+│   │   ├── reply_tool.rs             # rmcp MCP server (reply_message tool)
+│   │   ├── vision_tool.rs            # rmcp MCP server (analyze_image tool)
+│   │   ├── question_tool.rs          # rmcp MCP server (ask_user tool)
 │   │   └── context.rs                # ReplyContext serialization + validation
 │   ├── security/
-│   │   ├── mod.rs
-│   │   └── path_validator.rs         # File path/extension/size checks
+│   │   └── mod.rs                     # Path validation, file size/extension checks
 │   └── utils/
 │       ├── mod.rs
 │       ├── helpers.rs                # Regex validation, file size parsing
+│       ├── attachment_validator.rs   # Attachment validation (count, size, extension)
 │       └── constants.rs              # Default configs, timeouts
 ```
 
@@ -2485,7 +2708,7 @@ The `AppLogger` provides a unified logging + alerting interface:
 3. The alert service buffers errors and periodically flushes them as digest emails
 4. Self-protection: alert send failures use `eprintln` (not tracing) to avoid feedback loops
 
-## Email Command System
+## Command System
 
 ### Available Commands
 
@@ -2496,6 +2719,9 @@ The `AppLogger` provides a unified logging + alerting interface:
 | `/model reset` | Reset to default model from config | `/model reset` |
 | `/plan` | Switch to plan mode (read-only, enforced by OpenCode) | `/plan` |
 | `/build` | Switch to build mode (full execution, default) | `/build` |
+| `/reset` | Clear the current OpenCode session (start fresh context) | `/reset` |
+| `/close` | Close the current thread (deletes thread directory and state) | `/close` |
+| `/template` | Re-apply the pattern's thread template files | `/template` |
 
 ### Command Handler Trait
 

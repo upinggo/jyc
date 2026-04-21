@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::channels::types::{
     ChannelMatcher, ChannelPattern, InboundAdapter, InboundAdapterOptions, InboundMessage,
-    MessageContent, PatternMatch, PatternRules,
+    MessageContent, PatternMatch, PatternRules, TriggerMode,
 };
 use crate::utils::helpers::truncate_str;
 use super::client::GithubClient;
@@ -57,32 +57,86 @@ impl ChannelMatcher for GithubMatcher {
         message: &InboundMessage,
         patterns: &[ChannelPattern],
     ) -> Option<PatternMatch> {
-        // Routing is mention-driven: only comments containing @j:<role> trigger agents.
-        // The handover_role metadata is set by poll_once() when @j:<role> is detected.
-        // No mention = no routing.
-        let handover_role = message.metadata.get("handover_role").and_then(|v| v.as_str())?;
+        let handover_role = message.metadata.get("handover_role").and_then(|v| v.as_str());
 
         for pattern in patterns {
             if !pattern.enabled {
                 continue;
             }
-            if let Some(ref role) = pattern.role {
-                if role.eq_ignore_ascii_case(handover_role) {
-                    // Self-loop prevention: skip if comment is from this pattern's own role.
-                    // A [Developer] comment with @j:developer should NOT re-trigger developer.
+
+            let Some(ref pattern_role) = pattern.role else {
+                continue;
+            };
+
+            match pattern.trigger_mode {
+                TriggerMode::Pattern => {
+                    if !self.rules_match(&pattern.rules, message) {
+                        tracing::debug!(
+                            pattern = %pattern.name,
+                            "Pattern mode: rules did not match, skipping"
+                        );
+                        continue;
+                    }
+
                     if let Some(comment_role) = message.metadata.get("comment_role").and_then(|v| v.as_str()) {
-                        if role.eq_ignore_ascii_case(comment_role) {
+                        if pattern_role.eq_ignore_ascii_case(comment_role) {
                             continue;
                         }
                     }
 
-                    // Rule filtering: all present rules must match (AND logic).
-                    // Each individual rule uses OR logic (any value in the list suffices).
+                    return Some(PatternMatch {
+                        pattern_name: pattern.name.clone(),
+                        channel: "github".to_string(),
+                        matches: HashMap::new(),
+                    });
+                }
+                TriggerMode::Mention => {
+                    let Some(role) = handover_role else {
+                        continue;
+                    };
+                    if !pattern_role.eq_ignore_ascii_case(role) {
+                        continue;
+                    }
+
+                    if let Some(comment_role) = message.metadata.get("comment_role").and_then(|v| v.as_str()) {
+                        if pattern_role.eq_ignore_ascii_case(comment_role) {
+                            continue;
+                        }
+                    }
+
                     if !self.rules_match(&pattern.rules, message) {
                         tracing::debug!(
                             pattern = %pattern.name,
                             role = %role,
-                            "Pattern rules did not match, skipping"
+                            "Mention mode: pattern rules did not match, skipping"
+                        );
+                        continue;
+                    }
+
+                    return Some(PatternMatch {
+                        pattern_name: pattern.name.clone(),
+                        channel: "github".to_string(),
+                        matches: HashMap::new(),
+                    });
+                }
+                TriggerMode::Both => {
+                    let Some(role) = handover_role else {
+                        continue;
+                    };
+                    if !pattern_role.eq_ignore_ascii_case(role) {
+                        continue;
+                    }
+
+                    if let Some(comment_role) = message.metadata.get("comment_role").and_then(|v| v.as_str()) {
+                        if pattern_role.eq_ignore_ascii_case(comment_role) {
+                            continue;
+                        }
+                    }
+
+                    if !self.rules_match(&pattern.rules, message) {
+                        tracing::debug!(
+                            pattern = %pattern.name,
+                            "Both mode: pattern rules did not match, skipping"
                         );
                         continue;
                     }

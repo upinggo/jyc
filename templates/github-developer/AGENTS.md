@@ -124,8 +124,9 @@ Read the triggering comment at the bottom of the incoming message.
 
 When to hand off to Reviewer:
 - ONLY after completing the FULL implementation plan from a planner-created PR
-- Add the reviewer trigger label (e.g., `ready-for-review`) — this auto-triggers reviewer via pattern matching
+- Add the reviewer trigger label (e.g., `ready-for-review`) — the reviewer pattern uses `trigger_mode = "both"` so it requires BOTH the label AND `@j:reviewer` mention
 - Mark PR ready: `gh pr ready <number>`
+- Post a comment with `@j:reviewer` to trigger the reviewer (required with "both" mode)
 
 When NOT to hand off:
 - After fixing reviewer feedback (reviewer already knows — they will re-review)

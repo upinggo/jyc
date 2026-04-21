@@ -338,6 +338,100 @@ impl GithubInboundAdapter {
         }
     }
 
+    /// Load seen issues from persistent storage.
+    /// File format: one line per issue (`{number}:{labels}:{updated_at}`).
+    async fn load_seen_issues(&self) -> HashSet<String> {
+        let file = self.state_dir.join("seen-issues.txt");
+        if !file.exists() {
+            return HashSet::new();
+        }
+        match tokio::fs::read_to_string(&file).await {
+            Ok(content) => {
+                let set: HashSet<String> = content
+                    .lines()
+                    .map(|line| line.trim().to_string())
+                    .filter(|line| !line.is_empty())
+                    .collect();
+                tracing::debug!(
+                    channel = %self.channel_name,
+                    count = set.len(),
+                    "Loaded seen issues"
+                );
+                set
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to load seen issues, starting fresh"
+                );
+                HashSet::new()
+            }
+        }
+    }
+
+    /// Track a seen issue (append to file).
+    /// Key format: `{number}:{labels}:{updated_at}`
+    async fn track_seen_issue(&self, key: &str, seen: &mut HashSet<String>) {
+        if seen.insert(key.to_string()) {
+            let file = self.state_dir.join("seen-issues.txt");
+            use tokio::io::AsyncWriteExt;
+            if let Ok(mut f) = tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&file)
+                .await
+            {
+                let _ = f.write_all(format!("{key}\n").as_bytes()).await;
+            }
+
+            if seen.len() > 5000 {
+                self.compact_seen_issues(seen).await;
+            }
+        }
+    }
+
+    /// Compact seen issues file by keeping only the latest entries.
+    async fn compact_seen_issues(&self, seen: &mut HashSet<String>) {
+        if seen.len() <= 2000 {
+            return;
+        }
+
+        let mut entries: Vec<(u64, String)> = seen
+            .iter()
+            .map(|key| {
+                let number = key.split(':').next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
+                (number, key.clone())
+            })
+            .collect();
+        entries.sort_unstable_by_key(|(number, _)| *number);
+        let keep_from = entries.len() - 2000;
+        let keep: HashSet<String> = entries[keep_from..]
+            .iter()
+            .map(|(_, key)| key.clone())
+            .collect();
+
+        let before = seen.len();
+        *seen = keep;
+
+        let file = self.state_dir.join("seen-issues.txt");
+        let content: String = seen
+            .iter()
+            .map(|key| format!("{key}\n"))
+            .collect();
+        if let Err(e) = tokio::fs::write(&file, content).await {
+            tracing::warn!(error = %e, "Failed to compact seen issues file");
+        } else {
+            tracing::info!(
+                channel = %self.channel_name,
+                before = before,
+                after = seen.len(),
+                "Compacted seen issues"
+            );
+        }
+    }
+
     /// Build a minimal InboundMessage from a GitHub event.
     /// Contains only trigger metadata — agent uses `gh` CLI for actual content.
     fn build_trigger_message(
@@ -479,6 +573,9 @@ impl InboundAdapter for GithubInboundAdapter {
         // Track processed event IDs for non-comment deduplication (close events)
         let mut processed_events: HashSet<String> = HashSet::new();
 
+        // Load seen issues for deduplication (prevent re-triggering after restart)
+        let mut seen_issues: HashSet<String> = self.load_seen_issues().await;
+
         // Cache issue info for comment routing (number → title, type, labels, assignees)
         let mut issue_cache: HashMap<u64, (String, String, Vec<String>, Vec<String>)> = HashMap::new();
 
@@ -522,6 +619,7 @@ impl InboundAdapter for GithubInboundAdapter {
                         &options,
                         &mut processed_comments,
                         &mut processed_events,
+                        &mut seen_issues,
                         &mut issue_cache,
                         &mut last_poll,
                     ).await {
@@ -550,6 +648,7 @@ impl GithubInboundAdapter {
         options: &InboundAdapterOptions,
         processed_comments: &mut HashSet<String>,
         processed_events: &mut HashSet<String>,
+        seen_issues: &mut HashSet<String>,
         issue_cache: &mut HashMap<u64, (String, String, Vec<String>, Vec<String>)>, // number → (title, type, labels, assignees)
         last_poll: &mut String,
     ) -> Result<()> {
@@ -580,6 +679,14 @@ impl GithubInboundAdapter {
                 issue.number,
                 (issue.title.clone(), github_type.to_string(), labels, assignees),
             );
+
+            // Track seen issues for dedup (prevent re-triggering after restart)
+            let labels_sorted: String = issue.labels.iter()
+                .map(|l| l.name.clone())
+                .collect::<Vec<_>>()
+                .join(",");
+            let seen_key = format!("{}:{}:{}", issue.number, labels_sorted, issue.updated_at);
+            self.track_seen_issue(&seen_key, seen_issues).await;
         }
 
         // 2. Fetch and process comments — only route those with @j:<role> mentions.

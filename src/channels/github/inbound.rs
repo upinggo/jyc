@@ -104,7 +104,9 @@ impl ChannelMatcher for GithubMatcher {
                         }
                     }
 
-                    if !self.rules_match(&pattern.rules, message) {
+                    // In Mention mode, pattern rules are optional (backward compatibility)
+                    // Only check rules if any are actually defined
+                    if self.has_rules_defined(&pattern.rules) && !self.rules_match(&pattern.rules, message) {
                         tracing::debug!(
                             pattern = %pattern.name,
                             role = %role,
@@ -159,6 +161,13 @@ impl ChannelMatcher for GithubMatcher {
 }
 
 impl GithubMatcher {
+    /// Check if any pattern rules are defined (non-empty).
+    fn has_rules_defined(&self, rules: &PatternRules) -> bool {
+        rules.github_type.is_some()
+            || rules.labels.is_some()
+            || rules.assignees.is_some()
+    }
+
     /// Check whether the GitHub-specific rules (github_type, labels, assignees) all match.
     ///
     /// All present rules use AND logic (all must pass).

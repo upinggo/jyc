@@ -607,20 +607,11 @@ impl GithubInboundAdapter {
 
             let body_trimmed = comment.body.trim();
 
-            // Extract @j:<role> mention — only route if present
+            // Extract @j:<role> mention
             let handover_role = mention_re
                 .captures(body_trimmed)
                 .and_then(|caps| caps.get(1))
                 .map(|m| m.as_str().to_lowercase());
-
-            let handover_role = match handover_role {
-                Some(role) => role,
-                None => {
-                    // No @j:<role> mention — skip routing, but mark as processed
-                    self.track_comment(&comment_key, processed_comments).await;
-                    continue;
-                }
-            };
 
             // Extract [Role] prefix for self-loop prevention
             let comment_role = extract_comment_role(body_trimmed);
@@ -635,18 +626,7 @@ impl GithubInboundAdapter {
 
             let event_uid = format!("comment-{}", comment.id);
 
-            tracing::info!(
-                channel = %self.channel_name,
-                event = "mention",
-                comment_id = comment.id,
-                issue_number = issue_number,
-                target_role = %handover_role,
-                user = %comment.user.login,
-                body_preview = %truncate_str(&comment.body, 80),
-                "Comment with @j:{} detected → routing", handover_role,
-            );
-
-            // Build trigger message with handover_role metadata
+            // Build trigger message
             let mut message = self.build_trigger_message(
                 "issue_comment",
                 issue_number,
@@ -675,10 +655,33 @@ impl GithubInboundAdapter {
                 None => message.content.text = Some(comment_section),
             }
 
-            message.metadata.insert(
-                "handover_role".to_string(),
-                serde_json::Value::String(handover_role),
-            );
+            // Add handover_role only if @j:<role> mention exists
+            // Pattern mode patterns can match without handover_role
+            if let Some(ref role) = handover_role {
+                message.metadata.insert(
+                    "handover_role".to_string(),
+                    serde_json::Value::String(role.clone()),
+                );
+
+                tracing::info!(
+                    channel = %self.channel_name,
+                    event = "mention",
+                    comment_id = comment.id,
+                    issue_number = issue_number,
+                    target_role = %role,
+                    user = %comment.user.login,
+                    body_preview = %truncate_str(&comment.body, 80),
+                    "Comment with @j:{} detected → routing", role,
+                );
+            } else {
+                tracing::debug!(
+                    channel = %self.channel_name,
+                    comment_id = comment.id,
+                    issue_number = issue_number,
+                    user = %comment.user.login,
+                    "Comment without @j:<role> mention → routing for Pattern mode"
+                );
+            }
 
             if let Some(ref role) = comment_role {
                 message.metadata.insert(

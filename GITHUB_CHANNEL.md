@@ -13,7 +13,7 @@ repositories through issue discussion, PR development, and code review.
    - **Both mode**: Requires both pattern rules match AND `@j:<role>` mention.
    - Configure via `trigger_mode` field in pattern config (default: `mention` for backward compatibility)
    - Processed comment IDs persisted to `<channel>/.github/processed-comments.txt`
-   - Seen issues persisted to `<channel>/.github/seen-issues.txt` to prevent re-trigger after restart
+   - Seen issues persisted to `<channel>/.github/seen-issues.txt` to prevent re-trigger after restart (tracked by number:labels:updated_at)
 3. **One Token, Role Prefix + Self-Loop Prevention** — Single GitHub PAT. Agents
    prefix comments with `[Planner]`, `[Developer]`, `[Reviewer]`. Each pattern
    only skips comments from its **own** role (self-loop prevention), but allows
@@ -213,7 +213,7 @@ All comments are routed (not just those with mentions) to enable Pattern mode ma
 Self-loop prevention still applies: an agent's own comments (identified by `[Role]` prefix) don't re-trigger that same agent.
 
 Processed comment IDs are persisted to `<channel>/.github/processed-comments.txt`.
-Seen issues are persisted to `<channel>/.github/seen-issues.txt` to prevent re-triggering after restart.
+Seen issues are persisted to `<channel>/.github/seen-issues.txt` to prevent re-triggering after restart. Issues are tracked by `{number}:{labels}:{updated_at}` — note that if labels change without updating the issue's `updated_at`, re-triggering may not occur.
 
 ### Configuration Example
 

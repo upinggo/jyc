@@ -557,6 +557,7 @@ impl ThreadManager {
                 input_tokens,
                 max_tokens,
                 activity: vec![],  // Filled by InspectServer from event bus
+                last_active_at: None,  // Filled by InspectServer from event bus
             });
         }
 

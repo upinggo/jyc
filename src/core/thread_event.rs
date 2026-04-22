@@ -101,6 +101,21 @@ pub enum ThreadEvent {
         /// When the tool completed
         timestamp: DateTime<Utc>,
     },
+
+    /// AI thinking/reasoning event.
+    ///
+    /// Sent when the AI model produces reasoning/thinking content
+    /// (e.g., chain-of-thought before generating a response).
+    Thinking {
+        /// Name of the thread
+        thread_name: String,
+        /// Preview of the thinking text (truncated to ~300 chars)
+        text: String,
+        /// Full length of the thinking text in characters
+        full_length: usize,
+        /// When the thinking was received
+        timestamp: DateTime<Utc>,
+    },
 }
 
 impl ThreadEvent {
@@ -113,6 +128,7 @@ impl ThreadEvent {
             ThreadEvent::ProcessingCompleted { thread_name, .. } => thread_name,
             ThreadEvent::ToolStarted { thread_name, .. } => thread_name,
             ThreadEvent::ToolCompleted { thread_name, .. } => thread_name,
+            ThreadEvent::Thinking { thread_name, .. } => thread_name,
         }
     }
 
@@ -126,6 +142,7 @@ impl ThreadEvent {
             ThreadEvent::ProcessingCompleted { timestamp, .. } => *timestamp,
             ThreadEvent::ToolStarted { timestamp, .. } => *timestamp,
             ThreadEvent::ToolCompleted { timestamp, .. } => *timestamp,
+            ThreadEvent::Thinking { timestamp, .. } => *timestamp,
         }
     }
 }

@@ -332,6 +332,14 @@ fn event_to_activity(event: &ThreadEvent) -> ActivityEntry {
         } => {
             format!("Heartbeat: {activity} ({elapsed_secs}s)")
         }
+        ThreadEvent::Thinking { text, full_length, .. } => {
+            let oneline = text.replace('\n', " ");
+            if *full_length > text.len() {
+                format!("Thinking: {oneline}...")
+            } else {
+                format!("Thinking: {oneline}")
+            }
+        }
     };
     ActivityEntry { time, text }
 }

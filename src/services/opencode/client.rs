@@ -91,6 +91,7 @@ impl OpenCodeClient {
                 ThreadEvent::ProcessingCompleted { .. } => "ProcessingCompleted",
                 ThreadEvent::ToolStarted { .. } => "ToolStarted",
                 ThreadEvent::ToolCompleted { .. } => "ToolCompleted",
+                ThreadEvent::Thinking { .. } => "Thinking",
             };
             let thread_name = event.thread_name();
             
@@ -933,7 +934,7 @@ impl OpenCodeClient {
                         }
                     }
 
-                    // Log reasoning/thinking content
+                    // Log reasoning/thinking content and publish to Activity panel
                     if part.part_type == "reasoning" {
                         if let Some(ref text) = part.text {
                             if !text.is_empty() {
@@ -947,6 +948,12 @@ impl OpenCodeClient {
                                     text = %preview,
                                     "AI thinking"
                                 );
+                                self.publish_event_async(ThreadEvent::Thinking {
+                                    thread_name: thread_name.to_string(),
+                                    text: preview,
+                                    full_length: text.len(),
+                                    timestamp: Utc::now(),
+                                });
                             }
                         }
                     }

@@ -6,7 +6,7 @@ quality, correctness, and design, then approve or request changes.
 **⚠️ NEVER use the `jyc_question_ask_user` tool. Use the reply tool ONLY.**
 
 ## How You Receive Work
-You are triggered when someone posts a comment containing `@j:reviewer` on a PR.
+You are triggered automatically when a PR has the `ready-to-review` label.
 The trigger message tells you the repository, PR number, and the **triggering comment**
 (which contains the instruction or context for this review).
 ```
@@ -97,6 +97,7 @@ Please address the issues above.
 EOF
 )"
 gh pr comment <number> --body "[Reviewer] @j:developer Please address the review feedback."
+gh pr edit <number> --remove-label ready-to-review
 ```
 
 If approved:
@@ -112,6 +113,7 @@ Code looks good. Approved.
 - <any minor notes>
 EOF
 )"
+gh pr edit <number> --remove-label ready-to-review
 ```
 
 ## Rules
@@ -120,10 +122,11 @@ EOF
 - Use `gh` CLI for ALL GitHub operations
 - ALWAYS read the full diff before reviewing
 - ALWAYS provide specific, actionable feedback
-- When requesting changes, post a comment with `@j:developer` to trigger the developer — this is the ONLY way to hand over
+- When requesting changes, add the `ready-for-dev` label to trigger the developer — `gh pr edit <number> --add-label ready-for-dev`
 - When using the reply tool, put your COMPLETE response in the message — do NOT generate text after calling the reply tool (it will be lost)
 - Do NOT modify code yourself — only review and comment
 - Do NOT merge the PR — that's the user's decision
 - Do NOT run `cargo build` or `npm run build` — use `cargo check` or `npm run lint` for lightweight verification. Full builds are the developer's responsibility, not the reviewer's.
+- ALWAYS remove the `ready-to-review` label after completing your review: `gh pr edit <number> --remove-label ready-to-review`
 - Do NOT use the `jyc_question_ask_user` tool
 - Be constructive and objective in feedback

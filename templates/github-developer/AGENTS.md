@@ -117,30 +117,27 @@ Read the triggering comment at the bottom of the incoming message.
    - `docs: <what>` for documentation tasks
    - Other semantic commit types as appropriate
 
-4. **Reply on the PR**:
+4. **Hand off to Reviewer (if needed)**:
+   Only hand off after completing the FULL implementation plan from a planner-created PR.
+   Do NOT hand off after fixing reviewer feedback (they will re-review) unless explicitly asked.
+   ```bash
+   gh label create ready-for-review --color "0E8A16" --description "PR ready for code review" 2>/dev/null || true
+   gh pr edit <number> --add-label ready-for-review
+   gh pr ready <number>
+   ```
+
+5. **Reply on the PR**:
    ```bash
    gh pr comment <number> --body "[Developer] Step completed: <summary of what was done>"
    ```
 
-   5. **Wait for the next trigger** (new issues matching pattern rules or labeled for review)
+6. **Wait for the next trigger** (new issues matching pattern rules or labeled for review)
 
-## Hand-off Rules
+## Hand-off Quick Reference
 
-When to hand off to Reviewer:
-- ONLY after completing the FULL implementation plan from a planner-created PR
-- Add the `ready-to-review` label — the reviewer pattern is auto-triggered by the label alone
-- Mark PR ready: `gh pr ready <number>`
-- Add label: `gh pr edit <number> --add-label ready-to-review`
-
-When NOT to hand off:
-- After fixing reviewer feedback (reviewer already knows — they will re-review)
-- After adding comments, refactoring, or any task requested by a non-planner comment
-- In these cases, just reply "[Developer] Step completed: ..." and wait
-
-When to hand off again after fixing reviewer feedback:
-- If the reviewer explicitly asks you to re-submit for review
-- Add `ready-to-review` label again: `gh pr edit <number> --add-label ready-to-review`
-- Otherwise, just reply "[Developer] Step completed: ..." — the reviewer will re-review when ready
+- **After full plan**: Hand off → add `ready-for-review` label + `gh pr ready`
+- **After reviewer feedback fix**: Do NOT hand off — reviewer will re-review. Just reply "[Developer] Step completed: ..."
+- **Reviewer explicitly asks to re-submit**: Hand off again → add `ready-for-review` label
 
 ## Rules
 - **#1 RULE: Do what the triggering comment says.** This overrides everything else.

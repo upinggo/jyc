@@ -686,19 +686,53 @@ impl GithubInboundAdapter {
 
             issue_cache.insert(
                 issue.number,
-                (issue.title.clone(), github_type.to_string(), labels, assignees),
+                (issue.title.clone(), github_type.to_string(), labels.clone(), assignees.clone()),
             );
 
-            // Track seen issues for dedup (prevent re-triggering after restart)
+            // Track seen issues for dedup (prevent re-triggering after restart).
+            // The seen_key includes labels and updated_at so label changes re-trigger.
             let labels_sorted: String = issue.labels.iter()
                 .map(|l| l.name.clone())
                 .collect::<Vec<_>>()
                 .join(",");
             let seen_key = format!("{}:{}:{}", issue.number, labels_sorted, issue.updated_at);
+            let is_new = !seen_issues.contains(&seen_key);
             self.track_seen_issue(&seen_key, seen_issues).await;
+
+            // For new/changed issues, create a trigger message so Pattern-mode
+            // patterns can match on issue metadata (type, labels, assignees)
+            // without requiring a comment.
+            if is_new {
+                let event_uid = format!("{}-{}-opened", github_type, issue.number);
+
+                let message = self.build_trigger_message(
+                    "issues",
+                    issue.number,
+                    &issue.title,
+                    github_type,
+                    "opened",
+                    &issue.user.login,
+                    &labels,
+                    &assignees,
+                    &event_uid,
+                );
+
+                tracing::info!(
+                    channel = %self.channel_name,
+                    event = "issue_trigger",
+                    number = issue.number,
+                    github_type = github_type,
+                    labels = ?labels,
+                    "New/changed issue detected → routing for Pattern mode"
+                );
+
+                if let Err(e) = (options.on_message)(message) {
+                    tracing::error!(error = %e, number = issue.number, "Failed to route issue event");
+                }
+            }
         }
 
-        // 2. Fetch and process comments — only route those with @j:<role> mentions.
+        // 2. Fetch and process comments.
         // The issue cache is now populated, so lookups work correctly.
         let comments = client.list_comments_since(&poll_start).await?;
         tracing::trace!(

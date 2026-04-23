@@ -42,6 +42,8 @@ pub enum TemplatesAction {
 #[derive(Debug, Deserialize)]
 struct TemplateEntry {
     skills: Vec<String>,
+    #[serde(default)]
+    mcps: Vec<String>,
 }
 
 /// Top-level structure of `templates/templates.toml`.
@@ -141,7 +143,15 @@ async fn run_list(source_dir_arg: Option<&Path>) -> Result<()> {
             .get(name.as_str())
             .map(|e| e.skills.join(", "))
             .unwrap_or_else(|| "(no skills)".to_string());
+        let mcps = config
+            .templates
+            .get(name.as_str())
+            .map(|e| e.mcps.join(", "))
+            .unwrap_or_default();
         println!("{name}: {skills}");
+        if !mcps.is_empty() {
+            println!("  mcps: {mcps}");
+        }
     }
 
     println!("\n{} template(s) total.", names.len());
@@ -292,6 +302,25 @@ async fn run_deploy(
                 .await
                 .with_context(|| format!("failed to write model-override for {tpl_name}"))?;
             println!("  model-override: {m}");
+        }
+
+        // Write mcps.json for template
+        let mcps = config
+            .templates
+            .get(tpl_name.as_str())
+            .map(|e| e.mcps.clone())
+            .unwrap_or_default();
+
+        if !mcps.is_empty() {
+            let jyc_dir = target.join(".jyc");
+            tokio::fs::create_dir_all(&jyc_dir)
+                .await
+                .with_context(|| format!("failed to create .jyc dir for {tpl_name}"))?;
+            let mcps_json = serde_json::to_string_pretty(&mcps)?;
+            tokio::fs::write(jyc_dir.join("mcps.json"), mcps_json)
+                .await
+                .with_context(|| format!("failed to write mcps.json for {tpl_name}"))?;
+            println!("  mcps: {}", mcps.join(", "));
         }
     }
 

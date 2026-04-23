@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1163,6 +1164,17 @@ async fn read_signal_attachments(
     Some(attachments)
 }
 
+#[derive(Debug, Deserialize)]
+struct TemplateEntryForInit {
+    #[serde(default)]
+    mcps: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TemplatesConfigForInit {
+    templates: HashMap<String, TemplateEntryForInit>,
+}
+
 async fn initialize_thread_from_template(
     thread_path: &Path,
     template_name: &str,
@@ -1171,7 +1183,7 @@ async fn initialize_thread_from_template(
     if thread_path.exists() {
         return Ok(());
     }
-    
+
     let template_src = template_dir.join(template_name);
     if !template_src.exists() {
         tracing::warn!(
@@ -1181,10 +1193,39 @@ async fn initialize_thread_from_template(
         );
         return Ok(());
     }
-    
+
     copy_template_files(&template_src, thread_path).await?;
-    
+
+    let jyc_dir = thread_path.join(".jyc");
+    tokio::fs::create_dir_all(&jyc_dir).await?;
+
+    tokio::fs::write(jyc_dir.join("template"), template_name)
+        .await
+        .context("failed to write template name")?;
+
+    let templates_config_path = template_dir.join("templates.toml");
+    if templates_config_path.exists() {
+        let content = tokio::fs::read_to_string(&templates_config_path)
+            .await
+            .context("failed to read templates.toml")?;
+        if let Ok(config) = toml::from_str::<TemplatesConfigForInit>(&content) {
+            if let Some(entry) = config.templates.get(template_name) {
+                let mcps_json = serde_json::to_string_pretty(&entry.mcps)?;
+                tokio::fs::write(jyc_dir.join("mcps.json"), mcps_json)
+                    .await
+                    .context("failed to write mcps.json")?;
+                tracing::debug!(
+                    template = %template_name,
+                    mcps = ?entry.mcps,
+                    "Wrote mcps.json"
+                );
+            }
+        } else {
+            tracing::warn!("Failed to parse {}", templates_config_path.display());
+        }
+    }
+
     tracing::info!(template = %template_name, "Thread initialized from template");
-    
+
     Ok(())
 }

@@ -8,6 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pandoc python3 \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Rust toolchain (needed by OpenCode agent for cargo build/test)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 # Install OpenCode
 RUN curl -fsSL https://opencode.ai/install | bash \
     && ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode
@@ -24,6 +28,9 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Install oauth2-forwarder for browser-based OAuth2 in containers
+RUN npm install -g oauth2-forwarder
 
 # Directories and workdir
 RUN mkdir -p /root/.claude/skills /root/.agents/skills \

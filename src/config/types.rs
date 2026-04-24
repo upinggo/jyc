@@ -3,6 +3,42 @@ use std::collections::HashMap;
 
 use crate::channels::types::ChannelPattern;
 
+/// MCP server configuration for template-driven MCP tool setup.
+///
+/// Supports both `local` (subprocess) and `remote` (HTTP) MCP server types.
+/// Named MCPs are defined in `config.toml` `[[mcps]]` and referenced by
+/// templates in `templates.toml` to determine which MCPs appear in each
+/// thread's `opencode.json`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpServerConfig {
+    pub name: String,
+
+    #[serde(flatten)]
+    pub kind: McpServerKind,
+}
+
+/// Kind of MCP server — either `local` (subprocess) or `remote` (HTTP).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum McpServerKind {
+    Local {
+        command: Vec<String>,
+        #[serde(default)]
+        environment: HashMap<String, String>,
+        #[serde(default = "default_mcp_timeout")]
+        timeout: u64,
+    },
+    Remote {
+        url: String,
+        #[serde(default = "default_true")]
+        enabled: bool,
+    },
+}
+
+fn default_mcp_timeout() -> u64 {
+    300000
+}
+
 /// Top-level application configuration, deserialized from config.toml.
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
@@ -30,6 +66,11 @@ pub struct AppConfig {
 
     /// Vision API configuration (image analysis via OpenAI-compatible API)
     pub vision: Option<VisionConfig>,
+
+    /// Named MCP server configurations, referenced by templates.
+    /// Each template in `templates.toml` can specify which MCPs it needs.
+    #[serde(default)]
+    pub mcps: Vec<McpServerConfig>,
 }
 
 /// General application settings.
@@ -370,4 +411,35 @@ pub struct OutboundAttachmentConfig {
 
     /// Max number of attachments to send per message
     pub max_per_message: Option<usize>,
+}
+
+/// Idle cleanup configuration for a channel pattern.
+///
+/// When enabled, automatically removes large subdirectories (e.g., cloned `repo/`)
+/// from idle threads while preserving all metadata (`.jyc/`, chat history, sessions).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdleCleanupConfig {
+    /// Whether idle cleanup is enabled (default: false)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Idle timeout in seconds before cleaning (default: 86400 = 24 hours)
+    #[serde(default = "default_86400")]
+    pub timeout_secs: u64,
+
+    /// Subdirectory paths to clean (e.g., ["repo"]) (default: [])
+    #[serde(default)]
+    pub clean_paths: Vec<String>,
+
+    /// Scan interval in seconds (default: 300 = 5 minutes)
+    #[serde(default = "default_300")]
+    pub interval_secs: u64,
+}
+
+fn default_86400() -> u64 {
+    86400
+}
+
+fn default_300() -> u64 {
+    300
 }

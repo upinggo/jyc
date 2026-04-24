@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use arc_swap::ArcSwap;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -91,7 +93,7 @@ pub struct ThreadManager {
     workspace_dir: PathBuf,
 
     // Application config (for command handlers that need channel/pattern info)
-    config: Arc<crate::config::types::AppConfig>,
+    config: Arc<ArcSwap<crate::config::types::AppConfig>>,
 
     // Metrics handle for reporting events to the inspect server
     pub(crate) metrics: MetricsHandle,
@@ -113,7 +115,7 @@ impl ThreadManager {
         heartbeat_config: HeartbeatConfig,
         heartbeat_template: String,
         template_dir: PathBuf,
-        config: Arc<crate::config::types::AppConfig>,
+        config: Arc<ArcSwap<crate::config::types::AppConfig>>,
         channel_name: String,
         workspace_dir: PathBuf,
         metrics: MetricsHandle,
@@ -148,7 +150,7 @@ impl ThreadManager {
         heartbeat_config: HeartbeatConfig,
         heartbeat_template: String,
         template_dir: PathBuf,
-        config: Arc<crate::config::types::AppConfig>,
+        config: Arc<ArcSwap<crate::config::types::AppConfig>>,
         channel_name: String,
         workspace_dir: PathBuf,
         metrics: MetricsHandle,
@@ -510,7 +512,7 @@ impl ThreadManager {
         // This is an approximation: semaphore total - available = active
         // We stored the capacity in the constructor but Semaphore doesn't expose it.
         // We use config's max_concurrent_threads as the total.
-        self.config.general.max_concurrent_threads
+        self.config.load().general.max_concurrent_threads
             .saturating_sub(self.semaphore.available_permits())
     }
 
@@ -952,7 +954,7 @@ async fn process_message(
     agent: Arc<dyn AgentService>,
     pending_rx: &mut mpsc::Receiver<QueueItem>,
     template_dir: &PathBuf,
-    config: &Arc<crate::config::types::AppConfig>,
+    config: &Arc<ArcSwap<crate::config::types::AppConfig>>,
     thread_manager: Arc<ThreadManager>,
 ) -> Result<()> {
     let message = &item.message;
@@ -1002,7 +1004,7 @@ async fn process_message(
     let cmd_context = CommandContext {
         args: vec![],
         thread_path: store_result.thread_path.clone(),
-        config: config.clone(),
+        config: config.load_full(),
         channel: message.channel.clone(),
         agent: Some(agent.clone()),
         template_dir: template_dir.clone(),
@@ -1244,6 +1246,17 @@ async fn read_signal_attachments(
     Some(attachments)
 }
 
+#[derive(Debug, Deserialize)]
+struct TemplateEntryForInit {
+    #[serde(default)]
+    mcps: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TemplatesConfigForInit {
+    templates: HashMap<String, TemplateEntryForInit>,
+}
+
 async fn initialize_thread_from_template(
     thread_path: &Path,
     template_name: &str,
@@ -1252,7 +1265,7 @@ async fn initialize_thread_from_template(
     if thread_path.exists() {
         return Ok(());
     }
-    
+
     let template_src = template_dir.join(template_name);
     if !template_src.exists() {
         tracing::warn!(
@@ -1262,10 +1275,39 @@ async fn initialize_thread_from_template(
         );
         return Ok(());
     }
-    
+
     copy_template_files(&template_src, thread_path).await?;
-    
+
+    let jyc_dir = thread_path.join(".jyc");
+    tokio::fs::create_dir_all(&jyc_dir).await?;
+
+    tokio::fs::write(jyc_dir.join("template"), template_name)
+        .await
+        .context("failed to write template name")?;
+
+    let templates_config_path = template_dir.join("templates.toml");
+    if templates_config_path.exists() {
+        let content = tokio::fs::read_to_string(&templates_config_path)
+            .await
+            .context("failed to read templates.toml")?;
+        if let Ok(config) = toml::from_str::<TemplatesConfigForInit>(&content) {
+            if let Some(entry) = config.templates.get(template_name) {
+                let mcps_json = serde_json::to_string_pretty(&entry.mcps)?;
+                tokio::fs::write(jyc_dir.join("mcps.json"), mcps_json)
+                    .await
+                    .context("failed to write mcps.json")?;
+                tracing::debug!(
+                    template = %template_name,
+                    mcps = ?entry.mcps,
+                    "Wrote mcps.json"
+                );
+            }
+        } else {
+            tracing::warn!("Failed to parse {}", templates_config_path.display());
+        }
+    }
+
     tracing::info!(template = %template_name, "Thread initialized from template");
-    
+
     Ok(())
 }

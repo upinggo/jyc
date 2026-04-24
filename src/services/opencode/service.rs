@@ -1,4 +1,5 @@
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use chrono::Utc;
 use std::path::{Path, PathBuf};
@@ -27,6 +28,7 @@ use tokio::sync::mpsc;
 pub struct OpenCodeService {
     server: Arc<OpenCodeServer>,
     agent_config: Arc<AgentConfig>,
+    app_config: Arc<ArcSwap<crate::config::types::AppConfig>>,
     workdir: PathBuf,
     /// Shared HTTP client — reused across all requests to share connection pool.
     http_client: reqwest::Client,
@@ -35,8 +37,6 @@ pub struct OpenCodeService {
     event_bus: Mutex<Option<ThreadEventBusRef>>,
     /// Per-thread event bus mapping for thread isolation.
     event_bus_map: Mutex<std::collections::HashMap<String, ThreadEventBusRef>>,
-    /// Vision API configuration (optional).
-    vision_config: Option<Arc<crate::config::types::VisionConfig>>,
 }
 
 impl OpenCodeService {
@@ -44,42 +44,38 @@ impl OpenCodeService {
     pub fn new(
         server: Arc<OpenCodeServer>,
         agent_config: Arc<AgentConfig>,
+        app_config: Arc<ArcSwap<crate::config::types::AppConfig>>,
         workdir: PathBuf,
     ) -> Self {
         Self {
             server,
             agent_config,
+            app_config,
             workdir,
             http_client: reqwest::Client::new(),
             event_bus: Mutex::new(None),
             event_bus_map: Mutex::new(std::collections::HashMap::new()),
-            vision_config: None,
         }
     }
-    
+
     /// Create a new OpenCodeService with optional event bus.
     #[allow(dead_code)]
     pub fn new_with_event_bus(
         server: Arc<OpenCodeServer>,
         agent_config: Arc<AgentConfig>,
+        app_config: Arc<ArcSwap<crate::config::types::AppConfig>>,
         workdir: PathBuf,
         event_bus: Option<ThreadEventBusRef>,
     ) -> Self {
         Self {
             server,
             agent_config,
+            app_config,
             workdir,
             http_client: reqwest::Client::new(),
             event_bus: Mutex::new(event_bus),
             event_bus_map: Mutex::new(std::collections::HashMap::new()),
-            vision_config: None,
         }
-    }
-
-    /// Set the vision configuration.
-    pub fn with_vision_config(mut self, config: Option<crate::config::types::VisionConfig>) -> Self {
-        self.vision_config = config.map(Arc::new);
-        self
     }
     
     /// Helper method to publish an event if event bus is available.
@@ -255,11 +251,12 @@ impl OpenCodeService {
         );
 
         // 2. Ensure thread has opencode.json
+        let app_config_snapshot = self.app_config.load();
         let config_changed = session::ensure_thread_opencode_setup(
             thread_path,
             &self.agent_config,
+            &app_config_snapshot,
             &self.workdir,
-            self.vision_config.as_deref(),
         ).await?;
 
         tracing::debug!(config_changed = config_changed, "opencode.json check");

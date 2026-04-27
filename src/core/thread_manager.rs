@@ -464,6 +464,26 @@ impl ThreadManager {
                     if let Err(e) = tokio::fs::write(&pattern_file, &item.pattern_match.pattern_name).await {
                         tracing::warn!(error = %e, "Failed to write pattern file");
                     }
+
+                    // Persist who triggered this thread (assignees for GitHub, sender for others).
+                    // Dashboard uses this to show which users are already being served.
+                    let triggered_by_file = thread_path.join(".jyc").join("triggered-by");
+                    if !triggered_by_file.exists() {
+                        let triggered_by = item.message.metadata
+                            .get("github_assignees")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| item.message.sender.clone());
+                        if let Err(e) = tokio::fs::write(&triggered_by_file, &triggered_by).await {
+                            tracing::warn!(error = %e, "Failed to write triggered-by file");
+                        }
+                    }
                 }
 
                 // Update current message for event listeners
@@ -688,6 +708,13 @@ impl ThreadManager {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
 
+            // Read who triggered this thread (assignees / sender)
+            let triggered_by = tokio::fs::read_to_string(thread_path.join(".jyc").join("triggered-by"))
+                .await
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+
             // Read session state
             let (input_tokens, max_tokens) = read_input_tokens(&thread_path).await;
             let model = read_model_override(&thread_path).await;
@@ -725,6 +752,7 @@ impl ThreadManager {
                 mode,
                 input_tokens,
                 max_tokens,
+                triggered_by,
                 activity: vec![],  // Filled by InspectServer from event bus
                 last_active_at,  // Filled by activity tracker; falls back to .jyc mtime
             });

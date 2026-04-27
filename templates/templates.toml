@@ -30,6 +30,6 @@ mcps = []
 skills = ["coding-principles", "dev-workflow"]
 mcps = []
 
-[templates.ui-ux-frontend]
+[templates.frontend-designer]
 skills = ["ui-ux-frontend"]
 mcps = []

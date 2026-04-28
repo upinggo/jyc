@@ -89,6 +89,25 @@ gh issue edit <number> --remove-label feature-plan
 - NEVER write code, create files, or do technical analysis
 - Reply in the same language as the user
 
+## UI/UX/Frontend Auto-Detection — Delegate to Frontend Designer
+
+When analyzing an issue, if the feature involves **any** of the following, you MUST delegate to the **Frontend Designer agent** by adding a label:
+
+- User-facing interface changes (web, mobile, terminal/TUI, desktop)
+- Dashboard, form, table, or layout design
+- Visual design (colors, typography, spacing, icons)
+- User flow or interaction design
+- Accessibility or usability requirements
+
+**How to delegate:**
+```bash
+cd repo
+gh label create needs-frontend-review --color "7B61FF" --description "Needs UI/UX review from Frontend Designer agent" 2>/dev/null || true
+gh issue edit <number> --add-label "needs-frontend-review"
+```
+
+The Frontend Designer agent will be triggered automatically and provide UX analysis, user flow recommendations, and accessibility requirements. Incorporate its feedback into your high-level plan before handing off to the Detail-Level Planner.
+
 ## Behavioral Guidelines
 
 Follow the `coding-principles` skill — especially Principle 1 (Think Before Coding) and Principle 4 (Goal-Driven Execution).

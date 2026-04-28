@@ -129,6 +129,25 @@ EOF
 gh pr edit <number> --remove-label ready-for-review
 ```
 
+## UI/UX/Frontend Auto-Detection — Delegate to Frontend Designer
+
+When reviewing a PR, if the diff touches **any** of the following, you MUST delegate to the **Frontend Designer agent** by adding a label:
+
+- Frontend code (HTML, CSS, JavaScript/TypeScript UI components, templates, views)
+- TUI / terminal UI (ratatui, crossterm, etc.)
+- Dashboard, form, table, or layout changes
+- User-facing visual changes (colors, typography, spacing, icons)
+- Accessibility or usability concerns
+
+**How to delegate:**
+```bash
+cd repo
+gh label create needs-frontend-review --color "7B61FF" --description "Needs UI/UX review from Frontend Designer agent" 2>/dev/null || true
+gh pr edit <number> --add-label "needs-frontend-review"
+```
+
+The Frontend Designer agent will be triggered automatically and provide a dedicated UI/UX review on the PR. You should still review non-UI aspects (correctness, design, tests, etc.) and note in your review that a Frontend Designer review has been requested.
+
 ## Rules
 - ALWAYS prefix every comment or review body with `[Reviewer]` — this is how the system identifies your comments and prevents self-loops
 - ALWAYS `cd repo` before running any `gh` or `git` command

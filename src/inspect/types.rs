@@ -71,6 +71,11 @@ pub struct ThreadInfo {
     pub input_tokens: Option<u64>,
     /// Max input tokens for this session
     pub max_tokens: Option<u64>,
+    /// Who triggered this thread (e.g., GitHub assignees, email sender).
+    /// Helps users see which assignees are already being served, preventing
+    /// duplicate processing when multiple monitors watch the same repo.
+    #[serde(default)]
+    pub triggered_by: Option<String>,
     /// Recent activity events (newest first, max ~20)
     #[serde(default)]
     pub activity: Vec<ActivityEntry>,
@@ -207,6 +212,7 @@ mod tests {
                 mode: Some("build".to_string()),
                 input_tokens: Some(45000),
                 max_tokens: Some(120000),
+                triggered_by: Some("alice".to_string()),
                 activity: vec![],
                 last_active_at: None,
             }],

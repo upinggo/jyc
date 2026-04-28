@@ -268,6 +268,7 @@ fn render_threads(frame: &mut Frame, area: Rect, app: &mut App) {
         Cell::from("Thread"),
         Cell::from("Channel"),
         Cell::from("Pattern"),
+        Cell::from("Trigger"),
         Cell::from("Status"),
         Cell::from("Tokens"),
         Cell::from("Last Active"),
@@ -297,6 +298,7 @@ fn render_threads(frame: &mut Frame, area: Rect, app: &mut App) {
                 Cell::from(t.name.clone()),
                 Cell::from(t.channel.clone()),
                 Cell::from(t.pattern.clone().unwrap_or("-".into())),
+                Cell::from(t.triggered_by.clone().unwrap_or("-".into())),
                 Cell::from(Span::styled(format!("{}", t.status), status_style)),
                 Cell::from(tokens),
                 Cell::from(format_last_active(t.last_active_at.as_deref())),
@@ -305,9 +307,10 @@ fn render_threads(frame: &mut Frame, area: Rect, app: &mut App) {
         .collect();
 
     let widths = [
-        Constraint::Min(20),
+        Constraint::Min(18),
         Constraint::Length(12),
         Constraint::Length(12),
+        Constraint::Length(14),
         Constraint::Length(12),
         Constraint::Length(12),
         Constraint::Length(12),
@@ -379,6 +382,12 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
         Span::raw("  "),
         Span::styled("Pattern: ", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(selected.pattern.as_deref().unwrap_or("-")),
+        Span::raw("  "),
+        Span::styled("Trigger: ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            selected.triggered_by.as_deref().unwrap_or("-"),
+            Style::default().fg(Color::Cyan),
+        ),
     ]));
 
     info_lines.push(Line::from(vec![

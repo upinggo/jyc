@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -209,6 +209,41 @@ impl OpenCodeService {
                 "Event bus removed from per-thread map"
             );
         }
+    }
+
+    /// Kill LSP server processes spawned by the OpenCode server.
+    ///
+    /// Uses `pkill -P <opencode_pid> -f rust-analyzer` to kill
+    /// rust-analyzer child processes of the known OpenCode server PID.
+    /// Frees memory occupied by LSP servers (especially rust-analyzer
+    /// at ~2GB) after a prompt completes.
+    async fn kill_lsp_processes(&self) -> Result<()> {
+        let pid = match self.server.server_pid().await {
+            Some(pid) => pid,
+            None => {
+                tracing::debug!("OpenCode server not running, skipping LSP kill");
+                return Ok(());
+            }
+        };
+
+        tracing::info!(
+            pid = pid,
+            "Killing rust-analyzer child processes of OpenCode server"
+        );
+
+        let status = tokio::process::Command::new("pkill")
+            .args(["-P", &pid.to_string(), "-f", "rust-analyzer"])
+            .status()
+            .await
+            .context("failed to execute pkill")?;
+
+        if status.success() {
+            tracing::info!("rust-analyzer processes killed via pkill");
+        } else {
+            tracing::debug!("pkill found no matching processes (exit code non-zero)");
+        }
+
+        Ok(())
     }
 
     /// Internal: generate AI reply via OpenCode SSE streaming.
@@ -636,6 +671,17 @@ impl AgentService for OpenCodeService {
         thread_cancel: CancellationToken,
     ) -> Result<AgentResult> {
         let result = self.generate_reply(message, thread_name, thread_path, message_dir, pending_rx, thread_cancel).await?;
+
+        let kill_lsp = self.app_config.load()
+            .agent.opencode.as_ref()
+            .map(|oc| oc.kill_lsp_after_prompt)
+            .unwrap_or(true);
+
+        if kill_lsp {
+            if let Err(e) = self.kill_lsp_processes().await {
+                tracing::warn!(error = %e, "Failed to kill LSP processes after prompt");
+            }
+        }
 
         Ok(AgentResult {
             reply_sent_by_tool: result.reply_sent_by_tool,

@@ -239,17 +239,28 @@ fn render_channels(frame: &mut Frame, area: Rect, app: &App) {
             if i > 0 {
                 parts.push(Span::raw("  "));
             }
-            parts.push(Span::styled(
-                "●",
-                Style::default().fg(Color::Green),
-            ));
-            parts.push(Span::raw(format!(" {} ({})", ch.name, ch.channel_type)));
+            let free = ch.max_concurrent.saturating_sub(ch.active_workers);
+            let dot_color = if free == 0 {
+                Color::Red
+            } else if free < ch.max_concurrent {
+                Color::Yellow
+            } else {
+                Color::Green
+            };
+            parts.push(Span::styled("●", Style::default().fg(dot_color)));
+            parts.push(Span::raw(format!(
+                " {} ({} {}/{})",
+                ch.name, ch.channel_type, free, ch.max_concurrent
+            )));
             parts
         })
         .collect();
 
-    let text = Paragraph::new(Line::from(spans)).block(block);
-    frame.render_widget(text, area);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let channels_para = Paragraph::new(Line::from(spans));
+    frame.render_widget(channels_para, inner);
 }
 
 fn render_threads(frame: &mut Frame, area: Rect, app: &mut App) {

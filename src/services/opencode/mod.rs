@@ -128,7 +128,8 @@ impl OpenCodeServer {
     /// PID (process group) first, then fall back to SIGKILL, before calling
     /// `child.kill()` as a final safety net.
     pub async fn stop(&self) -> Result<()> {
-        if let Some(mut child) = self.process.lock().await.take() {
+        let had_process = self.process.lock().await.take();
+        if let Some(mut child) = had_process {
             tracing::info!("Stopping OpenCode server (process group kill)...");
 
             if let Some(pid) = child.id() {
@@ -147,10 +148,12 @@ impl OpenCodeServer {
 
             child.kill().await.ok();
             child.wait().await.ok();
+            tracing::info!("OpenCode server stopped");
+        } else {
+            tracing::debug!("OpenCode server stop called but already stopped");
         }
         *self.port.lock().await = None;
         *self.base_url.lock().await = None;
-        tracing::info!("OpenCode server stopped");
         Ok(())
     }
 
@@ -181,6 +184,14 @@ impl OpenCodeServer {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
         anyhow::bail!("OpenCode server API not ready after 5s")
+    }
+
+    /// Get the PID of the running OpenCode server process.
+    ///
+    /// Returns `Some(pid)` when the server is running and `None` when stopped.
+    pub async fn server_pid(&self) -> Option<u32> {
+        let guard = self.process.lock().await;
+        guard.as_ref().and_then(|child| child.id())
     }
 
     /// Get the current port (if running).

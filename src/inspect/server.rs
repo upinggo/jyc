@@ -40,8 +40,6 @@ pub struct InspectContext {
     pub health_stats: SharedHealthStats,
     /// Per-thread activity logs from SSE events
     pub activity_map: SharedActivityMap,
-    /// Max concurrent threads per channel
-    pub max_concurrent: usize,
     /// When the monitor started
     pub start_time: Instant,
     /// Path to the config file (for reload)
@@ -223,16 +221,20 @@ impl InspectServer {
     async fn build_state(context: &InspectContext) -> InspectState {
         let uptime = context.start_time.elapsed().as_secs();
 
-        // Collect threads from all thread managers
         let mut threads = Vec::new();
         let mut total_threads = 0;
         let mut active_workers = 0;
+        let mut per_channel_workers: HashMap<String, (usize, usize)> = HashMap::new();
 
         for tm in &context.thread_managers {
             let tm_threads = tm.list_threads().await;
             total_threads += tm_threads.len();
             let stats = tm.get_stats().await;
             active_workers += stats.active_workers;
+            per_channel_workers.insert(
+                tm.channel_name().to_string(),
+                (stats.active_workers, tm.max_concurrent()),
+            );
             threads.extend(tm_threads);
         }
 
@@ -255,20 +257,30 @@ impl InspectServer {
 
         // Read metrics
         let health = context.health_stats.lock().await;
+        let max_concurrent: usize = context.thread_managers.iter().map(|tm| tm.max_concurrent()).sum();
         let stats = GlobalStats {
             active_workers,
             total_threads,
-            max_concurrent: context.max_concurrent,
+            max_concurrent,
+            available_workers: max_concurrent.saturating_sub(active_workers),
             messages_received: health.messages_received,
             messages_processed: health.messages_processed,
             errors: health.errors,
         };
         drop(health);
 
+        let mut channels = context.channels.clone();
+        for ch in &mut channels {
+            if let Some((aw, mc)) = per_channel_workers.get(&ch.name) {
+                ch.active_workers = *aw;
+                ch.max_concurrent = *mc;
+            }
+        }
+
         InspectState {
             uptime_secs: uptime,
             version: env!("CARGO_PKG_VERSION").to_string(),
-            channels: context.channels.clone(),
+            channels,
             threads,
             stats,
         }
@@ -516,13 +528,14 @@ mod tests {
                 ChannelInfo {
                     name: "emf".to_string(),
                     channel_type: "github".to_string(),
+                    active_workers: 0,
+                    max_concurrent: 0,
                 },
             ],
             health_stats: Arc::new(Mutex::new(
                 crate::core::metrics::HealthStats::default(),
             )),
             activity_map: Arc::new(Mutex::new(HashMap::new())),
-            max_concurrent: 3,
             start_time: Instant::now(),
             config_path: None,
             config: None,
@@ -566,7 +579,9 @@ mod tests {
             InspectResponse::State(state) => {
                 assert_eq!(state.channels.len(), 1);
                 assert_eq!(state.channels[0].name, "emf");
-                assert_eq!(state.stats.max_concurrent, 3);
+                assert_eq!(state.stats.active_workers, 0);
+                assert_eq!(state.stats.max_concurrent, 0);
+                assert_eq!(state.stats.available_workers, 0);
                 assert!(!state.version.is_empty());
             }
             other => panic!("expected State, got {:?}", other),
@@ -735,7 +750,6 @@ mode = "opencode"
             channels: vec![],
             health_stats: Arc::new(Mutex::new(crate::core::metrics::HealthStats::default())),
             activity_map: Arc::new(Mutex::new(HashMap::new())),
-            max_concurrent: 3,
             start_time: Instant::now(),
             config_path: Some(config_path.clone()),
             config: Some(config_swap.clone()),

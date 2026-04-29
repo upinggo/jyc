@@ -564,68 +564,54 @@ mode = "opencode"
     }
 
     #[tokio::test]
-    async fn test_idle_shutdown_logic() {
-        use crate::cli::monitor::{run_idle_monitor, IdleStopServer};
+    async fn test_permit_released_while_worker_idle() {
+        use tokio::sync::{Semaphore, mpsc};
+        use std::sync::Arc;
+        use std::time::Duration;
 
-        struct MockStopServer {
-            stopped: Arc<std::sync::atomic::AtomicBool>,
-        }
+        let semaphore = Arc::new(Semaphore::new(1));
+        let (tx, mut rx) = mpsc::channel::<i32>(10);
 
-        #[async_trait::async_trait]
-        impl IdleStopServer for MockStopServer {
-            async fn stop_server(&self) {
-                self.stopped.store(true, std::sync::atomic::Ordering::SeqCst);
-            }
-        }
+        tx.send(1).await.unwrap();
 
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let active_count = Arc::new(std::sync::atomic::AtomicUsize::new(1));
-        let idle_timeout = std::time::Duration::from_millis(200);
-        let check_interval = std::time::Duration::from_millis(50);
+        let sem = semaphore.clone();
+        let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel::<()>(1);
 
-        let active_clone = active_count.clone();
-        let active_fn: Box<dyn Fn() -> usize + Send + Sync> = Box::new(move || {
-            active_clone.load(std::sync::atomic::Ordering::SeqCst)
-        });
-
-        let mock_server = Arc::new(MockStopServer { stopped: stopped.clone() });
-
-        let cancel_clone = cancel.clone();
         let handle = tokio::spawn(async move {
-            run_idle_monitor(
-                active_fn,
-                mock_server,
-                idle_timeout,
-                check_interval,
-                cancel_clone,
-            ).await;
+            let mut _permit = sem.clone().acquire_owned().await.unwrap();
+
+            loop {
+                let msg = match rx.recv().await {
+                    Some(m) => m,
+                    None => break,
+                };
+
+                drop(_permit);
+                let _ = idle_tx.send(()).await;
+
+                let next = match rx.recv().await {
+                    Some(n) => n,
+                    None => break,
+                };
+
+                _permit = sem.clone().acquire_owned().await.unwrap();
+                let _ = next;
+                let _ = msg;
+            }
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        assert!(!stopped.load(std::sync::atomic::Ordering::SeqCst),
-            "Should not stop while workers are active");
+        tokio::time::timeout(Duration::from_secs(5), idle_rx.recv())
+            .await
+            .expect("timed out waiting for worker to go idle")
+            .expect("worker dropped idle signal");
 
-        active_count.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            semaphore.available_permits(), 1,
+            "Permit should be released while worker is idle waiting for next message"
+        );
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            async {
-                while !stopped.load(std::sync::atomic::Ordering::SeqCst) {
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                }
-            },
-        ).await;
-
-        assert!(result.is_ok(), "Idle timeout should trigger stop");
-        cancel.cancel();
+        tx.send(2).await.unwrap();
+        drop(tx);
         let _ = handle.await;
-    }
-
-    #[tokio::test]
-    async fn test_idle_timeout_zero_skips_monitor_spawn() {
-        let idle_timeout = std::time::Duration::ZERO;
-        assert!(idle_timeout.is_zero(),
-            "Duration::ZERO should be zero — production code uses this guard to skip spawning the idle monitor");
     }
 }

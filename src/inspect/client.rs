@@ -151,12 +151,13 @@ mod tests {
             channels: vec![ChannelInfo {
                 name: "test-ch".to_string(),
                 channel_type: "email".to_string(),
+                active_workers: 0,
+                max_concurrent: 0,
             }],
             health_stats: Arc::new(Mutex::new(
                 crate::core::metrics::HealthStats::default(),
             )),
             activity_map: Arc::new(Mutex::new(HashMap::new())),
-            max_concurrent: 5,
             start_time: Instant::now(),
             config_path: None,
             config: None,
@@ -182,7 +183,7 @@ mod tests {
 
         assert_eq!(state.channels.len(), 1);
         assert_eq!(state.channels[0].name, "test-ch");
-        assert_eq!(state.stats.max_concurrent, 5);
+        assert_eq!(state.stats.max_concurrent, 0);
 
         cancel.cancel();
     }

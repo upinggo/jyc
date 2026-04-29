@@ -600,28 +600,8 @@ impl ThreadManager {
                 // Clear current message after processing
                 let _ = current_message_tx.send(None);
 
-                // Release the semaphore permit while idle, so new threads can start.
                 drop(_permit);
 
-                // Re-acquire the permit before receiving the next message.
-                // This ordering prevents message loss: if cancellation fires while
-                // waiting for the permit, no message has been taken from the channel yet.
-                _permit = tokio::select! {
-                    permit = semaphore.clone().acquire_owned() => match permit {
-                        Ok(p) => p,
-                        Err(_) => break,
-                    },
-                    _ = cancel.cancelled() => {
-                        tracing::info!("Worker cancelled while waiting for permit");
-                        break;
-                    }
-                    _ = thread_cancel.cancelled() => {
-                        tracing::info!("Worker cancelled (thread closed) while waiting for permit");
-                        break;
-                    }
-                };
-
-                // Now that we hold the permit, receive the next message.
                 let next = tokio::select! {
                     item = rx.recv() => match item {
                         Some(item) => item,
@@ -633,6 +613,21 @@ impl ThreadManager {
                     }
                     _ = thread_cancel.cancelled() => {
                         tracing::info!("Worker cancelled (thread closed)");
+                        break;
+                    }
+                };
+
+                _permit = tokio::select! {
+                    permit = semaphore.clone().acquire_owned() => match permit {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    },
+                    _ = cancel.cancelled() => {
+                        tracing::trace!("Worker cancelled while waiting for permit after receiving message");
+                        break;
+                    }
+                    _ = thread_cancel.cancelled() => {
+                        tracing::trace!("Worker cancelled (thread closed) while waiting for permit after receiving message");
                         break;
                     }
                 };
@@ -654,9 +649,9 @@ impl ThreadManager {
     pub async fn get_stats(&self) -> QueueStats {
         let queues = self.thread_queues.lock().await;
         let total_threads = queues.len();
-        let active_workers = self.semaphore.available_permits();
+        let active_workers = self.active_worker_count();
         QueueStats {
-            active_workers: total_threads.saturating_sub(active_workers),
+            active_workers,
             total_threads,
             pending_messages: 0,
         }

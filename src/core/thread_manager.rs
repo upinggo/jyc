@@ -425,6 +425,40 @@ impl ThreadManager {
                             "Failed to initialize thread from template"
                         );
                     }
+
+                    // Inject pattern-level skills into thread
+                    if let Some(skills_value) = item.message.metadata.get("skills") {
+                        if let Ok(skills) = serde_json::from_value::<Vec<String>>(skills_value.clone()) {
+                            if !skills.is_empty() {
+                                if let Err(e) = inject_pattern_skills(
+                                    &thread_path,
+                                    &skills,
+                                    &template_dir,
+                                ).await {
+                                    tracing::warn!(
+                                        error = %e,
+                                        skills = ?skills,
+                                        "Failed to inject pattern-level skills"
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Inject pattern-level MCPs into .jyc/extra-mcps.json
+                    if let Some(mcps_value) = item.message.metadata.get("pattern_mcps") {
+                        if let Ok(mcps) = serde_json::from_value::<Vec<String>>(mcps_value.clone()) {
+                            if !mcps.is_empty() {
+                                if let Err(e) = inject_pattern_mcps(&thread_path, &mcps).await {
+                                    tracing::warn!(
+                                        error = %e,
+                                        mcps = ?mcps,
+                                        "Failed to inject pattern-level MCPs"
+                                    );
+                                }
+                            }
+                        }
+                    }
                     
                     if let Some(repo_group_key) = item.message.metadata.get("repo_group_key").and_then(|v| v.as_str()) {
                         let shared_repo_dir = crate::core::thread_path::resolve_shared_repo_dir(&workspace, repo_group_key);
@@ -1482,6 +1516,129 @@ async fn initialize_thread_from_template(
     }
 
     tracing::info!(template = %template_name, "Thread initialized from template");
+
+    Ok(())
+}
+
+/// Inject pattern-level skills into a thread's `.opencode/skills/` directory.
+///
+/// Resolution order for each skill:
+/// 1. Project-level: `<workdir>/.opencode/skills/<name>/`
+/// 2. User-level: `~/.claude/skills/<name>/`
+///
+/// Existing skill directories in the thread are not overwritten,
+/// allowing template-deployed skills to take precedence.
+async fn inject_pattern_skills(
+    thread_path: &Path,
+    skills: &[String],
+    template_dir: &Path,
+) -> Result<()> {
+    // Project-level skills: <workdir>/.opencode/skills/
+    let workdir = template_dir
+        .parent()
+        .context("template_dir has no parent")?;
+    let project_skills = workdir.join(".opencode").join("skills");
+
+    // User-level skills: ~/.claude/skills/
+    let user_skills = std::env::var("HOME").ok()
+        .map(|h| PathBuf::from(h).join(".claude").join("skills"));
+
+    let skills_target = thread_path.join(".opencode").join("skills");
+    tokio::fs::create_dir_all(&skills_target).await
+        .context("failed to create .opencode/skills in thread")?;
+
+    for skill_name in skills {
+        let dst = skills_target.join(skill_name);
+
+        if dst.exists() {
+            tracing::debug!(
+                skill = %skill_name,
+                "Skill already present in thread, skipping"
+            );
+            continue;
+        }
+
+        // Resolve: project-level first, then user-level
+        let src = {
+            let project_src = project_skills.join(skill_name);
+            if project_src.exists() {
+                Some(project_src)
+            } else if let Some(ref user_dir) = user_skills {
+                let user_src = user_dir.join(skill_name);
+                if user_src.exists() {
+                    Some(user_src)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        match src {
+            Some(src_path) => {
+                copy_template_files(&src_path, &dst).await
+                    .with_context(|| format!("failed to copy skill '{skill_name}'"))?;
+                tracing::info!(
+                    skill = %skill_name,
+                    source = %src_path.display(),
+                    "Injected pattern-level skill"
+                );
+            }
+            None => {
+                tracing::warn!(
+                    skill = %skill_name,
+                    "Skill not found in project (.opencode/skills/) or user (~/.claude/skills/)"
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Inject pattern-level MCPs into a thread's `.jyc/extra-mcps.json`.
+///
+/// Merges with any existing extra MCPs (no duplicates). These are picked up
+/// by `ensure_thread_opencode_setup()` on the next session setup and included
+/// in the generated `opencode.json`.
+async fn inject_pattern_mcps(
+    thread_path: &Path,
+    mcps: &[String],
+) -> Result<()> {
+    let jyc_dir = thread_path.join(".jyc");
+    tokio::fs::create_dir_all(&jyc_dir).await
+        .context("failed to create .jyc directory")?;
+
+    let extra_mcps_path = jyc_dir.join("extra-mcps.json");
+
+    // Read existing extra-mcps.json if present
+    let mut all_mcps: Vec<String> = if extra_mcps_path.exists() {
+        let content = tokio::fs::read_to_string(&extra_mcps_path).await
+            .unwrap_or_default();
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    // Merge: add new MCPs without duplicates
+    let mut changed = false;
+    for mcp in mcps {
+        if !all_mcps.contains(mcp) {
+            all_mcps.push(mcp.clone());
+            changed = true;
+        }
+    }
+
+    if changed {
+        let content = serde_json::to_string_pretty(&all_mcps)?;
+        tokio::fs::write(&extra_mcps_path, content).await
+            .context("failed to write extra-mcps.json")?;
+        tracing::info!(
+            mcps = ?mcps,
+            "Injected pattern-level MCPs into extra-mcps.json"
+        );
+    }
 
     Ok(())
 }

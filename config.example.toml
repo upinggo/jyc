@@ -278,6 +278,8 @@ bind = "127.0.0.1:9876"  # Default; localhost only for security
 # enabled = true
 # role = "Planner"
 # template = "github-planner"
+# skills = ["ux-guidelines"]  # Extra skills merged with template skills including user-level and project-level skills
+# mcps = ["jyc_vision"] # Dynamically add mcp in this pattern, the mcp must be definition in the templates section otherwise it will not work
 #
 # [channels.my_repo.patterns.rules]
 # github_type = ["issue"]

@@ -105,6 +105,18 @@ impl MessageRouter {
             message.metadata.insert("role".to_string(), serde_json::Value::String(role));
         }
 
+        // Store pattern-level skills in message metadata for thread initialization
+        if let Some(pattern) = matched_pattern {
+            if !pattern.skills.is_empty() {
+                let skills_json = serde_json::to_value(&pattern.skills).unwrap_or_default();
+                message.metadata.insert("skills".to_string(), skills_json);
+            }
+            if !pattern.mcps.is_empty() {
+                let mcps_json = serde_json::to_value(&pattern.mcps).unwrap_or_default();
+                message.metadata.insert("pattern_mcps".to_string(), mcps_json);
+            }
+        }
+
         // Store repo_group_key in message metadata if repo_group is configured
         if let Some(repo_group) = matched_pattern.and_then(|p| p.repo_group.clone())
         {

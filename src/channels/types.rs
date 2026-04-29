@@ -284,6 +284,17 @@ pub struct ChannelPattern {
     /// Patterns without `repo_group` keep existing behavior (no symlink, no sharing).
     #[serde(default)]
     pub repo_group: Option<String>,
+    /// Extra skills to inject into the thread's `.opencode/skills/` directory.
+    /// These are merged with the template's skills (from `templates.toml`).
+    /// Skill directories are resolved from `<workdir>/.opencode/skills/<name>/`.
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// Extra MCP servers to enable for threads matching this pattern.
+    /// Names must match entries in the top-level `[[mcps]]` config or deploy-time
+    /// `mcp-defs.json`. Written to `.jyc/extra-mcps.json` at thread init, merged
+    /// with template MCPs from `.jyc/mcps.json`.
+    #[serde(default)]
+    pub mcps: Vec<String>,
 }
 
 impl Default for ChannelPattern {
@@ -299,6 +310,8 @@ impl Default for ChannelPattern {
             role: None,
             live_injection: true,
             repo_group: None,
+            skills: Vec::new(),
+            mcps: Vec::new(),
         }
     }
 }

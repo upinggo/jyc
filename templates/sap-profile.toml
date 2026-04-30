@@ -39,14 +39,27 @@ context_files = ["context/sap-project-background.md"]
 mcps = ["sap.tools.jira.mcp/mcp"]
 skills = ["sap-cap-ui5-dev"]
 
-# Developer: UI5 + Fiori tools for code generation, Figma for design reference
+# Developer: common SAP capabilities
 [templates.github-developer]
-mcps = ["ui5-mcp", "fiori-tools", "figma"]
+mcps = ["ui5-mcp", "fiori-tools"]
+skills = ["sap-cap-ui5-dev"]
+context_files = ["context/sap-project-background.md"]
+
+# Developer overrides for specific repos (selected via --repo)
+[templates.github-developer.repos."user/fiori-design-app"]
+mcps = ["figma", "playwright"]
+skills = ["sap-fiori-review"]
+context_files = ["context/fiori-design-guidelines.md"]
+
+[templates.github-developer.repos."user/cap-backend-service"]
+skills = ["incremental-dev"]
+
+# Reviewer: common SAP capabilities
+[templates.github-reviewer]
+mcps = ["sap.tools.jira.mcp/mcp", "ui5-mcp"]
 skills = ["sap-cap-ui5-dev", "sap-fiori-review"]
 context_files = ["context/sap-project-background.md"]
 
-# Reviewer: Jira for requirement context, UI5 for API verification, Figma for design comparison
-[templates.github-reviewer]
-mcps = ["sap.tools.jira.mcp/mcp", "ui5-mcp", "figma"]
-skills = ["sap-cap-ui5-dev", "sap-fiori-review"]
-context_files = ["context/sap-project-background.md"]
+# Reviewer overrides for specific repos
+[templates.github-reviewer.repos."user/fiori-design-app"]
+mcps = ["figma"]

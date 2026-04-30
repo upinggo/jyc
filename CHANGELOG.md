@@ -2,6 +2,40 @@
 
 All notable changes to JYC will be documented in this file.
 
+## [0.2.2] - 2026-04-30
+
+### Added
+
+- **Agent Profile system** — Deploy-time configuration for per-repo agent capabilities (#165)
+  - New `--profile <file>` flag on `jyc templates deploy` (replaces `--mcps`, kept as alias)
+  - Profile files declare **skills**, **MCPs**, and **context files** per template
+  - Context files are appended to `AGENTS.md` at deploy time as project background
+  - Skills from profile are merged (union, deduped) with `templates.toml` skills
+  - MCPs from profile are merged (union, deduped) with `templates.toml` MCPs
+
+- **Per-repo overrides within profiles** — `--repo` flag for repo-specific configuration
+  - Profile entries support `[templates.X.repos."owner/repo"]` sub-tables
+  - Repo-specific skills, MCPs, and context_files merge on top of template defaults
+  - Deploy: `jyc templates deploy /ws --profile sap-profile.toml --repo user/fiori-app`
+
+- **SAP development skills** — New skill files for SAP projects
+  - `sap-cap-ui5-dev` — CAP + UI5 development patterns
+  - `sap-fiori-review` — Fiori UX design review and accessibility audit
+  - `figma-to-fiori` — Generate CAP/UI5 code from Figma designs
+
+- **Example context file** — `templates/context/sap-project-background.md`
+  - Demonstrates how project background (tech stack, conventions, testing, build) is injected
+
+- **Runtime repo context reading** — Planner and Reviewer templates read repo's own `AGENTS.md`
+  - After clone, `cat AGENTS.md` reads repo-declared conventions as complementary context
+
+### Changed
+
+- `--mcps` renamed to `--profile` (backward-compatible alias preserved)
+- `templates/sap-mcps.toml` renamed to `templates/sap-profile.toml`
+- Internal structs renamed: `ExtraMcpsConfig` → `ProfileConfig`, `ExtraMcpsEntry` → `ProfileEntry`
+- Deploy output banner shows `Profile:` and `Repo:` fields
+
 ## [0.2.1] - 2026-04-26
 
 ### Added

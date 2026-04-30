@@ -46,6 +46,8 @@ skills = ["sap-cap-ui5-dev"]
 context_files = ["context/sap-project-background.md"]
 
 # Developer overrides for specific repos (selected via --repo)
+# NOTE: Replace "user/fiori-design-app" and "user/cap-backend-service" with your
+# actual GitHub "owner/repo" values before using this profile in production.
 [templates.github-developer.repos."user/fiori-design-app"]
 mcps = ["figma", "playwright"]
 skills = ["sap-fiori-review"]
@@ -61,5 +63,6 @@ skills = ["sap-cap-ui5-dev", "sap-fiori-review"]
 context_files = ["context/sap-project-background.md"]
 
 # Reviewer overrides for specific repos
+# NOTE: Replace "user/fiori-design-app" with your actual "owner/repo".
 [templates.github-reviewer.repos."user/fiori-design-app"]
 mcps = ["figma"]

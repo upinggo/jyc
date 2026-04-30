@@ -33,7 +33,7 @@ pub enum TemplatesAction {
         model: Option<String>,
 
         /// Agent profile file (TOML) with per-template skills, MCPs, and context
-        #[arg(long, alias = "mcps")]
+        #[arg(long)]
         profile: Option<PathBuf>,
 
         /// Target repository ("owner/repo") to select repo-specific profile overrides
@@ -245,8 +245,8 @@ async fn load_profile_config(path: &Path) -> Result<ProfileConfig> {
 ///
 /// Returns a merged entry where repo-specific skills/mcps/context_files are appended
 /// (deduped) to the template-level defaults.
-fn resolve_profile_entry<'a>(
-    profile: &'a ProfileConfig,
+fn resolve_profile_entry(
+    profile: &ProfileConfig,
     tpl_name: &str,
     repo: Option<&str>,
 ) -> ProfileEntry {
@@ -341,6 +341,40 @@ async fn run_deploy(
     if let Some(r) = repo {
         println!("Repo:            {r}");
     }
+
+    // Validate profile: warn about MCP names referenced in templates but not defined
+    if profile_file.is_some() {
+        let defined_mcp_names: Vec<&str> = profile.mcps.iter().map(|m| m.name.as_str()).collect();
+        for (tpl_name, entry) in &profile.templates {
+            for mcp_name in &entry.mcps {
+                if !defined_mcp_names.contains(&mcp_name.as_str()) {
+                    println!("WARNING: profile template '{tpl_name}' references MCP '{mcp_name}' which is not defined in [[mcps]]");
+                }
+            }
+            for (repo_key, repo_entry) in &entry.repos {
+                for mcp_name in &repo_entry.mcps {
+                    if !defined_mcp_names.contains(&mcp_name.as_str()) {
+                        println!("WARNING: profile template '{tpl_name}' repo '{repo_key}' references MCP '{mcp_name}' which is not defined in [[mcps]]");
+                    }
+                }
+            }
+        }
+        // Validate skills exist on disk
+        for (tpl_name, entry) in &profile.templates {
+            for skill in &entry.skills {
+                if !skills_dir.join(skill).is_dir() {
+                    println!("WARNING: profile template '{tpl_name}' references skill '{skill}' not found at {}", skills_dir.join(skill).display());
+                }
+            }
+            for (repo_key, repo_entry) in &entry.repos {
+                for skill in &repo_entry.skills {
+                    if !skills_dir.join(skill).is_dir() {
+                        println!("WARNING: profile template '{tpl_name}' repo '{repo_key}' references skill '{skill}' not found at {}", skills_dir.join(skill).display());
+                    }
+                }
+            }
+        }
+    }
     println!();
 
     // Collect and sort template directories
@@ -392,38 +426,52 @@ async fn run_deploy(
             println!("  AGENTS.md copied");
         }
 
-        // Append context_files to AGENTS.md
+        // Append context_files to AGENTS.md (batch read, single write)
         if !resolved.context_files.is_empty() {
             let agents_path = target.join("AGENTS.md");
             let profile_base_dir = profile_file
                 .and_then(|p| p.parent())
                 .unwrap_or(Path::new("."));
 
+            // Read existing AGENTS.md content once
+            let mut agents_content = if agents_path.exists() {
+                tokio::fs::read_to_string(&agents_path).await.unwrap_or_default()
+            } else {
+                String::new()
+            };
+
             let mut appended = Vec::new();
             for ctx_file in &resolved.context_files {
                 let ctx_path = profile_base_dir.join(ctx_file);
+
+                // Path traversal protection: ensure resolved path stays within profile dir
+                let canonical_base = std::fs::canonicalize(profile_base_dir)
+                    .unwrap_or_else(|_| profile_base_dir.to_path_buf());
                 if ctx_path.exists() {
+                    let canonical_ctx = std::fs::canonicalize(&ctx_path)
+                        .with_context(|| format!("failed to canonicalize context path {}", ctx_path.display()))?;
+                    if !canonical_ctx.starts_with(&canonical_base) {
+                        println!("  WARNING: context file '{}' resolves outside profile directory, skipping", ctx_file);
+                        continue;
+                    }
+
                     let content = tokio::fs::read_to_string(&ctx_path)
                         .await
                         .with_context(|| format!("failed to read context file {}", ctx_path.display()))?;
 
-                    let mut agents_content = if agents_path.exists() {
-                        tokio::fs::read_to_string(&agents_path).await.unwrap_or_default()
-                    } else {
-                        String::new()
-                    };
                     agents_content.push_str("\n\n---\n\n");
                     agents_content.push_str(&content);
-                    tokio::fs::write(&agents_path, agents_content)
-                        .await
-                        .with_context(|| format!("failed to append context to AGENTS.md for {tpl_name}"))?;
-
                     appended.push(ctx_file.as_str());
                 } else {
                     println!("  WARNING: context file '{}' not found at {}", ctx_file, ctx_path.display());
                 }
             }
+
+            // Single write with all context appended
             if !appended.is_empty() {
+                tokio::fs::write(&agents_path, agents_content)
+                    .await
+                    .with_context(|| format!("failed to write AGENTS.md with context for {tpl_name}"))?;
                 println!("  context: {}", appended.join(", "));
             }
         }
@@ -552,4 +600,169 @@ async fn run_deploy(
     println!("=== Deployment complete ===");
     println!("Templates deployed to: {}", target_dir.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_profile_config_basic() {
+        let toml_str = r#"
+[[mcps]]
+type = "local"
+name = "ui5-mcp"
+command = ["npx", "-y", "@ui5/mcp-server@latest"]
+
+[templates.github-developer]
+mcps = ["ui5-mcp"]
+skills = ["sap-cap-ui5-dev"]
+context_files = ["context/background.md"]
+"#;
+        let config: ProfileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.mcps.len(), 1);
+        assert_eq!(config.mcps[0].name, "ui5-mcp");
+        assert_eq!(config.templates.len(), 1);
+
+        let dev = config.templates.get("github-developer").unwrap();
+        assert_eq!(dev.mcps, vec!["ui5-mcp"]);
+        assert_eq!(dev.skills, vec!["sap-cap-ui5-dev"]);
+        assert_eq!(dev.context_files, vec!["context/background.md"]);
+    }
+
+    #[test]
+    fn test_parse_profile_config_with_repos() {
+        let toml_str = r#"
+[[mcps]]
+type = "local"
+name = "figma"
+command = ["npx", "figma-mcp"]
+
+[templates.github-developer]
+mcps = ["figma"]
+skills = ["base-skill"]
+
+[templates.github-developer.repos."org/repo-a"]
+mcps = ["extra-mcp"]
+skills = ["extra-skill"]
+context_files = ["context/repo-a.md"]
+"#;
+        let config: ProfileConfig = toml::from_str(toml_str).unwrap();
+        let dev = config.templates.get("github-developer").unwrap();
+        assert_eq!(dev.repos.len(), 1);
+
+        let repo = dev.repos.get("org/repo-a").unwrap();
+        assert_eq!(repo.mcps, vec!["extra-mcp"]);
+        assert_eq!(repo.skills, vec!["extra-skill"]);
+        assert_eq!(repo.context_files, vec!["context/repo-a.md"]);
+    }
+
+    #[test]
+    fn test_resolve_profile_entry_no_repo() {
+        let toml_str = r#"
+[templates.dev]
+mcps = ["mcp-a", "mcp-b"]
+skills = ["skill-a"]
+context_files = ["ctx.md"]
+
+[templates.dev.repos."org/repo"]
+mcps = ["mcp-c"]
+skills = ["skill-b"]
+"#;
+        let config: ProfileConfig = toml::from_str(toml_str).unwrap();
+        let resolved = resolve_profile_entry(&config, "dev", None);
+
+        assert_eq!(resolved.mcps, vec!["mcp-a", "mcp-b"]);
+        assert_eq!(resolved.skills, vec!["skill-a"]);
+        assert_eq!(resolved.context_files, vec!["ctx.md"]);
+    }
+
+    #[test]
+    fn test_resolve_profile_entry_with_repo() {
+        let toml_str = r#"
+[templates.dev]
+mcps = ["mcp-a"]
+skills = ["skill-a"]
+context_files = ["base.md"]
+
+[templates.dev.repos."org/repo"]
+mcps = ["mcp-b"]
+skills = ["skill-b"]
+context_files = ["repo.md"]
+"#;
+        let config: ProfileConfig = toml::from_str(toml_str).unwrap();
+        let resolved = resolve_profile_entry(&config, "dev", Some("org/repo"));
+
+        assert_eq!(resolved.mcps, vec!["mcp-a", "mcp-b"]);
+        assert_eq!(resolved.skills, vec!["skill-a", "skill-b"]);
+        assert_eq!(resolved.context_files, vec!["base.md", "repo.md"]);
+    }
+
+    #[test]
+    fn test_resolve_profile_entry_deduplication() {
+        let toml_str = r#"
+[templates.dev]
+mcps = ["mcp-a", "mcp-b"]
+skills = ["skill-a"]
+
+[templates.dev.repos."org/repo"]
+mcps = ["mcp-a", "mcp-c"]
+skills = ["skill-a", "skill-b"]
+"#;
+        let config: ProfileConfig = toml::from_str(toml_str).unwrap();
+        let resolved = resolve_profile_entry(&config, "dev", Some("org/repo"));
+
+        // mcp-a should not be duplicated
+        assert_eq!(resolved.mcps, vec!["mcp-a", "mcp-b", "mcp-c"]);
+        // skill-a should not be duplicated
+        assert_eq!(resolved.skills, vec!["skill-a", "skill-b"]);
+    }
+
+    #[test]
+    fn test_resolve_profile_entry_unknown_template() {
+        let toml_str = r#"
+[templates.dev]
+mcps = ["mcp-a"]
+skills = ["skill-a"]
+"#;
+        let config: ProfileConfig = toml::from_str(toml_str).unwrap();
+        let resolved = resolve_profile_entry(&config, "nonexistent", None);
+
+        assert!(resolved.mcps.is_empty());
+        assert!(resolved.skills.is_empty());
+        assert!(resolved.context_files.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_profile_entry_unknown_repo() {
+        let toml_str = r#"
+[templates.dev]
+mcps = ["mcp-a"]
+skills = ["skill-a"]
+
+[templates.dev.repos."org/repo"]
+mcps = ["mcp-b"]
+"#;
+        let config: ProfileConfig = toml::from_str(toml_str).unwrap();
+        // Use a repo that doesn't match
+        let resolved = resolve_profile_entry(&config, "dev", Some("org/other-repo"));
+
+        // Should only get base template entries, not repo overrides
+        assert_eq!(resolved.mcps, vec!["mcp-a"]);
+        assert_eq!(resolved.skills, vec!["skill-a"]);
+    }
+
+    #[test]
+    fn test_profile_config_defaults() {
+        let toml_str = r#"
+[templates.minimal]
+"#;
+        let config: ProfileConfig = toml::from_str(toml_str).unwrap();
+        let entry = config.templates.get("minimal").unwrap();
+
+        assert!(entry.mcps.is_empty());
+        assert!(entry.skills.is_empty());
+        assert!(entry.context_files.is_empty());
+        assert!(entry.repos.is_empty());
+    }
 }

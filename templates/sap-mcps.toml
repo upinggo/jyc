@@ -4,8 +4,49 @@ url = "https://mcp.jira.tools.sap/mcp"
 name = "sap.tools.jira.mcp/mcp"
 enabled = true
 
+[[mcps]]
+type = "local"
+name = "ui5-mcp"
+command = ["npx", "-y", "@ui5/mcp-server@latest"]
+timeout = 300000
+
+[[mcps]]
+type = "local"
+name = "fiori-tools"
+command = ["npx", "-y", "@sap-ux/fiori-mcp-server@0.6.47", "fiori-mcp"]
+timeout = 300000
+
+[[mcps]]
+type = "local"
+name = "figma"
+command = ["npx", "-y", "figma-developer-mcp@latest", "--stdio"]
+timeout = 300000
+
+# Playwright — browser automation, UI testing, screenshot capture
+[[mcps]]
+name = "playwright"
+type = "local"
+command = ["npx", "-y", "@executeautomation/playwright-mcp-server"]
+timeout = 300000
+
+# Planner: Jira for requirements context, Figma for design reading
 [templates.github-planner]
-mcps = ["sap.tools.jira.mcp/mcp"]
+mcps = ["sap.tools.jira.mcp/mcp", "figma"]
+skills = ["sap-cap-ui5-dev"]
+context_files = ["context/sap-project-background.md"]
 
 [templates.github-high-level-planner]
 mcps = ["sap.tools.jira.mcp/mcp"]
+skills = ["sap-cap-ui5-dev"]
+
+# Developer: UI5 + Fiori tools for code generation, Figma for design reference
+[templates.github-developer]
+mcps = ["ui5-mcp", "fiori-tools", "figma"]
+skills = ["sap-cap-ui5-dev", "sap-fiori-review"]
+context_files = ["context/sap-project-background.md"]
+
+# Reviewer: Jira for requirement context, UI5 for API verification, Figma for design comparison
+[templates.github-reviewer]
+mcps = ["sap.tools.jira.mcp/mcp", "ui5-mcp", "figma"]
+skills = ["sap-cap-ui5-dev", "sap-fiori-review"]
+context_files = ["context/sap-project-background.md"]

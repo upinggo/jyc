@@ -26,6 +26,8 @@ if [ ! -d ".git" ]; then
     gh repo clone <repository_from_trigger> .
 fi
 cp -rn .opencode/skills/* ../.opencode/skills/ 2>/dev/null || true
+# If repo has its own AGENTS.md, read it for project conventions
+cat AGENTS.md 2>/dev/null || true
 ```
 
 ## Workflow

@@ -178,6 +178,13 @@ struct ExtraMcpsConfig {
 struct ExtraMcpsEntry {
     #[serde(default)]
     mcps: Vec<String>,
+    /// Extra skills to deploy for this template (merged with templates.toml skills).
+    #[serde(default)]
+    skills: Vec<String>,
+    /// Context files to append to AGENTS.md (paths relative to the --mcps file).
+    /// Each file's content is appended as a new section in the deployed AGENTS.md.
+    #[serde(default)]
+    context_files: Vec<String>,
 }
 
 /// Load extra MCPs config from a TOML file.
@@ -300,6 +307,46 @@ async fn run_deploy(
             println!("  AGENTS.md copied");
         }
 
+        // Append context_files to AGENTS.md (from --mcps config, per-template)
+        if let Some(extra) = extra_mcps.templates.get(tpl_name.as_str()) {
+            if !extra.context_files.is_empty() {
+                let agents_path = target.join("AGENTS.md");
+                // Resolve context file paths relative to the --mcps config file
+                let mcps_base_dir = mcps_file
+                    .and_then(|p| p.parent())
+                    .unwrap_or(Path::new("."));
+
+                let mut appended = Vec::new();
+                for ctx_file in &extra.context_files {
+                    let ctx_path = mcps_base_dir.join(ctx_file);
+                    if ctx_path.exists() {
+                        let content = tokio::fs::read_to_string(&ctx_path)
+                            .await
+                            .with_context(|| format!("failed to read context file {}", ctx_path.display()))?;
+
+                        // Append with a separator
+                        let mut agents_content = if agents_path.exists() {
+                            tokio::fs::read_to_string(&agents_path).await.unwrap_or_default()
+                        } else {
+                            String::new()
+                        };
+                        agents_content.push_str("\n\n---\n\n");
+                        agents_content.push_str(&content);
+                        tokio::fs::write(&agents_path, agents_content)
+                            .await
+                            .with_context(|| format!("failed to append context to AGENTS.md for {tpl_name}"))?;
+
+                        appended.push(ctx_file.as_str());
+                    } else {
+                        println!("  WARNING: context file '{}' not found at {}", ctx_file, ctx_path.display());
+                    }
+                }
+                if !appended.is_empty() {
+                    println!("  context: {}", appended.join(", "));
+                }
+            }
+        }
+
         // Copy .jyc/ directory if it exists
         let jyc_src = tpl_src.join(".jyc");
         if jyc_src.is_dir() {
@@ -312,12 +359,21 @@ async fn run_deploy(
             println!("  .jyc copied");
         }
 
-        // Copy skills
-        let skills = config
+        // Copy skills (from templates.toml + extra config)
+        let mut skills: Vec<String> = config
             .templates
             .get(tpl_name.as_str())
-            .map(|e| e.skills.as_slice())
-            .unwrap_or(&[]);
+            .map(|e| e.skills.iter().cloned().collect())
+            .unwrap_or_default();
+
+        // Merge extra skills from --mcps file (per-template)
+        if let Some(extra) = extra_mcps.templates.get(tpl_name.as_str()) {
+            for skill in &extra.skills {
+                if !skills.contains(skill) {
+                    skills.push(skill.clone());
+                }
+            }
+        }
 
         if skills.is_empty() {
             println!("  (no skills)");
@@ -327,7 +383,7 @@ async fn run_deploy(
                 .await
                 .with_context(|| format!("failed to create skills dir for {tpl_name}"))?;
 
-            for skill in skills {
+            for skill in &skills {
                 let skill_src = skills_dir.join(skill);
                 if skill_src.is_dir() {
                     let skill_dst = skills_target.join(skill);

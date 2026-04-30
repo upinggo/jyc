@@ -32,9 +32,9 @@ pub enum TemplatesAction {
         #[arg(long)]
         model: Option<String>,
 
-        /// Extra MCPs config file (TOML) with per-template MCP mappings
-        #[arg(long)]
-        mcps: Option<PathBuf>,
+        /// Agent profile file (TOML) with per-template skills, MCPs, and context
+        #[arg(long, alias = "mcps")]
+        profile: Option<PathBuf>,
 
         /// Path to the source directory containing templates/ and .opencode/skills/
         #[arg(long)]
@@ -65,7 +65,7 @@ pub async fn run(action: &TemplatesAction, _workdir: &Path) -> Result<()> {
             template_name,
             as_name,
             model,
-            mcps,
+            profile,
             source_dir,
         } => {
             run_deploy(
@@ -73,7 +73,7 @@ pub async fn run(action: &TemplatesAction, _workdir: &Path) -> Result<()> {
                 template_name.as_deref(),
                 as_name.as_deref(),
                 model.as_deref(),
-                mcps.as_deref(),
+                profile.as_deref(),
                 source_dir.as_deref(),
             )
             .await
@@ -164,47 +164,54 @@ async fn run_list(source_dir_arg: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// Extra MCPs config: MCP definitions + per-template mappings from a TOML file.
+/// Agent profile config: MCP definitions + per-template skills, MCPs, and context.
+///
+/// This is passed via `--profile` (or deprecated alias `--mcps`) at deploy time.
+/// It allows attaching repo-specific capabilities to each agent template.
 #[derive(Debug, Deserialize, Default)]
-struct ExtraMcpsConfig {
+struct ProfileConfig {
     /// MCP server definitions to be written into deployed templates.
     #[serde(default)]
     mcps: Vec<crate::config::types::McpServerConfig>,
+    /// Per-template overrides: skills, MCPs, and context files.
     #[serde(default)]
-    templates: HashMap<String, ExtraMcpsEntry>,
+    templates: HashMap<String, ProfileEntry>,
 }
 
+/// Per-template profile entry declaring which skills, MCPs, and context to attach.
 #[derive(Debug, Deserialize)]
-struct ExtraMcpsEntry {
+struct ProfileEntry {
+    /// Extra MCPs to enable for this template.
     #[serde(default)]
     mcps: Vec<String>,
     /// Extra skills to deploy for this template (merged with templates.toml skills).
     #[serde(default)]
     skills: Vec<String>,
-    /// Context files to append to AGENTS.md (paths relative to the --mcps file).
+    /// Context files to append to AGENTS.md (paths relative to the profile file).
     /// Each file's content is appended as a new section in the deployed AGENTS.md.
     #[serde(default)]
     context_files: Vec<String>,
 }
 
-/// Load extra MCPs config from a TOML file.
+/// Load agent profile config from a TOML file.
 ///
 /// The file format:
 /// ```toml
 /// [[mcps]]
-/// name = "sap-jira"
-/// type = "remote"
-/// url = "https://mcp.jira.tools.sap/mcp"
-/// enabled = true
+/// name = "ui5-mcp"
+/// type = "local"
+/// command = ["npx", "-y", "@ui5/mcp-server@latest"]
 ///
-/// [templates.github-planner]
-/// mcps = ["sap-jira"]
+/// [templates.github-developer]
+/// mcps = ["ui5-mcp"]
+/// skills = ["sap-cap-ui5-dev"]
+/// context_files = ["context/sap-background.md"]
 /// ```
-async fn load_extra_mcps_config(path: &Path) -> Result<ExtraMcpsConfig> {
+async fn load_profile_config(path: &Path) -> Result<ProfileConfig> {
     let content = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("failed to read {}", path.display()))?;
-    let config: ExtraMcpsConfig =
+    let config: ProfileConfig =
         toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))?;
     Ok(config)
 }
@@ -215,7 +222,7 @@ async fn run_deploy(
     template_name: Option<&str>,
     as_name: Option<&str>,
     model: Option<&str>,
-    mcps_file: Option<&Path>,
+    profile_file: Option<&Path>,
     source_dir_arg: Option<&Path>,
 ) -> Result<()> {
     let source_dir = resolve_source_dir(source_dir_arg)?;
@@ -253,11 +260,11 @@ async fn run_deploy(
     if let Some(m) = model {
         println!("Model override:  {m}");
     }
-    let extra_mcps = if let Some(path) = mcps_file {
-        println!("MCPs file:       {}", path.display());
-        load_extra_mcps_config(path).await?
+    let profile = if let Some(path) = profile_file {
+        println!("Profile:         {}", path.display());
+        load_profile_config(path).await?
     } else {
-        ExtraMcpsConfig::default()
+        ProfileConfig::default()
     };
     println!();
 
@@ -307,18 +314,18 @@ async fn run_deploy(
             println!("  AGENTS.md copied");
         }
 
-        // Append context_files to AGENTS.md (from --mcps config, per-template)
-        if let Some(extra) = extra_mcps.templates.get(tpl_name.as_str()) {
-            if !extra.context_files.is_empty() {
+        // Append context_files to AGENTS.md (from profile, per-template)
+        if let Some(entry) = profile.templates.get(tpl_name.as_str()) {
+            if !entry.context_files.is_empty() {
                 let agents_path = target.join("AGENTS.md");
-                // Resolve context file paths relative to the --mcps config file
-                let mcps_base_dir = mcps_file
+                // Resolve context file paths relative to the profile file
+                let profile_base_dir = profile_file
                     .and_then(|p| p.parent())
                     .unwrap_or(Path::new("."));
 
                 let mut appended = Vec::new();
-                for ctx_file in &extra.context_files {
-                    let ctx_path = mcps_base_dir.join(ctx_file);
+                for ctx_file in &entry.context_files {
+                    let ctx_path = profile_base_dir.join(ctx_file);
                     if ctx_path.exists() {
                         let content = tokio::fs::read_to_string(&ctx_path)
                             .await
@@ -366,9 +373,9 @@ async fn run_deploy(
             .map(|e| e.skills.iter().cloned().collect())
             .unwrap_or_default();
 
-        // Merge extra skills from --mcps file (per-template)
-        if let Some(extra) = extra_mcps.templates.get(tpl_name.as_str()) {
-            for skill in &extra.skills {
+        // Merge extra skills from profile (per-template)
+        if let Some(entry) = profile.templates.get(tpl_name.as_str()) {
+            for skill in &entry.skills {
                 if !skills.contains(skill) {
                     skills.push(skill.clone());
                 }
@@ -411,16 +418,16 @@ async fn run_deploy(
             println!("  model-override: {m}");
         }
 
-        // Write mcps.json for template (merge templates.toml + extra mcps file)
+        // Write mcps.json for template (merge templates.toml + profile)
         let mut mcps: Vec<String> = config
             .templates
             .get(tpl_name.as_str())
             .map(|e| e.mcps.clone())
             .unwrap_or_default();
 
-        // Merge extra MCPs from --mcps file (per-template)
-        if let Some(extra) = extra_mcps.templates.get(tpl_name.as_str()) {
-            for name in &extra.mcps {
+        // Merge extra MCPs from profile (per-template)
+        if let Some(entry) = profile.templates.get(tpl_name.as_str()) {
+            for name in &entry.mcps {
                 if !mcps.contains(name) {
                     mcps.push(name.clone());
                 }
@@ -445,9 +452,9 @@ async fn run_deploy(
             }
         }
 
-        // Write MCP definitions from --mcps file into .jyc/mcp-defs.json
+        // Write MCP definitions from profile into .jyc/mcp-defs.json
         // Only include definitions referenced by this template's MCP names.
-        let extra_defs: Vec<_> = extra_mcps.mcps.iter()
+        let extra_defs: Vec<_> = profile.mcps.iter()
             .filter(|def| mcps.contains(&def.name))
             .collect();
 

@@ -187,6 +187,25 @@ When `github_event: "check_run"` appears in the triggering message, CI checks ha
 - Do NOT merge the PR
 - Do NOT use the `jyc_question_ask_user` tool
 
+## UI/UX/Frontend Auto-Detection — Delegate to Frontend Designer
+
+When implementing code, if the changes touch **any** of the following, you MUST delegate to the **Frontend Designer agent** by adding a label:
+
+- Frontend code (HTML, CSS, JavaScript/TypeScript UI components, templates, views)
+- TUI / terminal UI (ratatui, crossterm, etc.)
+- Dashboard, form, table, or layout changes
+- User-facing visual changes (colors, typography, spacing, icons)
+- Accessibility or usability concerns
+
+**How to delegate:**
+```bash
+cd repo
+gh label create needs-frontend-review --color "7B61FF" --description "Needs UI/UX review from Frontend Designer agent" 2>/dev/null || true
+gh pr edit <number> --add-label "needs-frontend-review"
+```
+
+The Frontend Designer agent will be triggered automatically and provide UI/UX guidance on the PR. Wait for its feedback before finalizing UI-related code, or incorporate its comments in a follow-up commit.
+
 ## Behavioral Guidelines
 
 Follow the `coding-principles` skill for behavioral guidelines when writing code.

@@ -342,3 +342,18 @@ bind = "127.0.0.1:9876"  # Default; localhost only for security
 # github_type = ["pull_request"]
 # labels = ["ready-for-review"]
 # assignees = ["alice"]
+#
+# # Pattern: Frontend Designer agent — auto-triggered by other agents
+# # When Planner/Developer/Reviewer detect UI/UX/frontend changes, they add
+# # the 'needs-frontend-review' label, which triggers this agent.
+# # Works on both issues (design guidance) and PRs (UI code review).
+# [[channels.my_repo.patterns]]
+# name = "frontend-designer"
+# enabled = true
+# role = "Frontend Designer"
+# template = "frontend-designer"
+# repo_group = "pr"  # Share repo clone with developer/reviewer
+#
+# [channels.my_repo.patterns.rules]
+# github_type = ["issue", "pull_request"]
+# labels = ["needs-frontend-review"]

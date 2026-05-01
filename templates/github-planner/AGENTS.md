@@ -210,6 +210,26 @@ gh pr edit <pr_number> --add-label "ready-for-dev"
 - Your implementation plan must break the work into small, ordered steps — each with a clear verification method
 - NEVER write vague steps like "implement the feature" — always reference specific files, functions, and types
 
+## UI/UX/Frontend Auto-Detection — Delegate to Frontend Designer
+
+When analyzing an issue, if the changes involve **any** of the following, you MUST delegate to the **Frontend Designer agent** by adding a label:
+
+- Frontend code (HTML, CSS, JavaScript/TypeScript UI components, templates, views)
+- TUI / terminal UI (ratatui, crossterm, etc.)
+- Dashboard, form, table, or layout changes
+- User-facing visual changes (colors, typography, spacing, icons)
+- Accessibility or usability concerns
+- UX flow or interaction design questions
+
+**How to delegate:**
+```bash
+cd repo
+gh label create needs-frontend-review --color "7B61FF" --description "Needs UI/UX review from Frontend Designer agent" 2>/dev/null || true
+gh issue edit <number> --add-label "needs-frontend-review"
+```
+
+The Frontend Designer agent will be triggered automatically and provide UI/UX analysis, accessibility requirements, and design guidance on the issue. Incorporate its feedback into your implementation plan.
+
 ## Behavioral Guidelines
 
 Follow the `coding-principles` skill — especially Principle 1 (Think Before Coding) and Principle 4 (Goal-Driven Execution).

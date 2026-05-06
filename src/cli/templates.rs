@@ -223,14 +223,15 @@ struct RepoProfileEntry {
 /// The file format:
 /// ```toml
 /// [[mcps]]
-/// name = "ui5-mcp"
-/// type = "local"
-/// command = ["npx", "-y", "@ui5/mcp-server@latest"]
+/// name = "my-mcp"
+/// type = "remote"
+/// url = "https://mcp.example.com/mcp"
+/// enabled = true
 ///
-/// [templates.github-developer]
-/// mcps = ["ui5-mcp"]
-/// skills = ["sap-cap-ui5-dev"]
-/// context_files = ["context/sap-background.md"]
+/// [templates.github-planner]
+/// mcps = ["my-mcp"]
+/// skills = ["specific-skill"]
+/// context_files = ["context/specific-context.md"]
 /// ```
 async fn load_profile_config(path: &Path) -> Result<ProfileConfig> {
     let content = tokio::fs::read_to_string(path)

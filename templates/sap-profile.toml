@@ -22,6 +22,20 @@ name = "figma"
 command = ["npx", "-y", "figma-developer-mcp@latest", "--stdio"]
 timeout = 300000
 
+# Chrome DevTools — browser inspection, performance tracing, accessibility audits
+[[mcps]]
+name = "chrome-devtools"
+type = "local"
+command = ["npx", "-y", "@anthropic-ai/chrome-devtools-mcp@latest"]
+timeout = 300000
+
+# SAP CAP — CDS model search, CAP documentation lookup
+[[mcps]]
+name = "cap-mcp"
+type = "local"
+command = ["npx", "-y", "@cap-js/mcp-server@latest"]
+timeout = 300000
+
 # Playwright — browser automation, UI testing, screenshot capture
 [[mcps]]
 name = "playwright"
@@ -41,7 +55,7 @@ skills = ["sap-cap-ui5-dev"]
 
 # Developer: common SAP capabilities
 [templates.github-developer]
-mcps = ["ui5-mcp", "fiori-tools"]
+mcps = ["ui5-mcp", "fiori-tools", "cap-mcp", "chrome-devtools"]
 skills = ["sap-cap-ui5-dev"]
 context_files = ["context/sap-project-background.md"]
 
@@ -58,7 +72,7 @@ skills = ["incremental-dev"]
 
 # Reviewer: common SAP capabilities
 [templates.github-reviewer]
-mcps = ["sap.tools.jira.mcp/mcp", "ui5-mcp"]
+mcps = ["sap.tools.jira.mcp/mcp", "ui5-mcp", "cap-mcp"]
 skills = ["sap-cap-ui5-dev", "sap-fiori-review"]
 context_files = ["context/sap-project-background.md"]
 

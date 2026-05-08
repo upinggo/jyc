@@ -563,6 +563,33 @@ impl ThreadManager {
                     }
                 }
                 
+                // Check symlink integrity after AI processing completes
+                if let Some(repo_group_key) = item.message.metadata.get("repo_group_key").and_then(|v| v.as_str()) {
+                    let thread_path = storage.workspace().join(&thread_name);
+                    let symlink_path = thread_path.join("repo");
+                    match tokio::fs::symlink_metadata(&symlink_path).await {
+                        Ok(meta) if meta.file_type().is_symlink() => {
+                            // Symlink intact — good
+                        }
+                        Ok(_) => {
+                            tracing::warn!(
+                                thread = %thread_name,
+                                group_key = %repo_group_key,
+                                path = %symlink_path.display(),
+                                "Shared repo symlink was replaced by a regular directory (agent likely ran rm -rf repo && mkdir repo)"
+                            );
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                thread = %thread_name,
+                                group_key = %repo_group_key,
+                                path = %symlink_path.display(),
+                                "Shared repo symlink is missing after processing"
+                            );
+                        }
+                    }
+                }
+
                 // Clear current message after processing
                 let _ = current_message_tx.send(None);
 
@@ -1346,6 +1373,10 @@ async fn process_message(
                 )
                 .await?;
             tracing::info!("Reply delivered via outbound adapter");
+            // Clean up signal files after successful delivery to prevent re-delivery on restart
+            tokio::fs::remove_file(&signal_path).await.ok();
+            let reply_md_path = store_result.thread_path.join(".jyc").join("reply.md");
+            tokio::fs::remove_file(&reply_md_path).await.ok();
             thread_manager.metrics.reply_by_tool(thread_name);
         } else {
             tracing::warn!("MCP tool signaled reply but no reply text available");

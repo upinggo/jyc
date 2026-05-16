@@ -1464,31 +1464,50 @@ dependencies = [
 ]
 
 [[package]]
-name = "jyc"
-version = "0.2.1"
+name = "jyc-agent"
+version = "0.3.0"
 dependencies = [
  "anyhow",
- "arc-swap",
- "async-imap",
- "async-native-tls",
  "async-trait",
- "base64",
  "chrono",
- "clap",
- "comrak",
- "crossterm",
  "futures",
  "glob",
- "htmd",
- "lettre",
- "libc",
- "mail-parser",
- "openlark",
- "ratatui",
+ "jyc-core",
+ "jyc-mcp",
+ "jyc-types",
+ "jyc-utils",
  "regex",
  "reqwest",
  "reqwest-eventsource",
- "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "jyc-channels"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "base64",
+ "chrono",
+ "comrak",
+ "jyc-core",
+ "jyc-mcp",
+ "jyc-services",
+ "jyc-types",
+ "jyc-utils",
+ "mail-parser",
+ "openlark",
+ "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
@@ -1497,9 +1516,154 @@ dependencies = [
  "tokio-util",
  "toml",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "jyc-cli"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "chrono",
+ "clap",
+ "crossterm",
+ "jyc-agent",
+ "jyc-channels",
+ "jyc-core",
+ "jyc-inspect",
+ "jyc-mcp",
+ "jyc-services",
+ "jyc-types",
+ "jyc-utils",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "jyc-core"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "base64",
+ "chrono",
+ "comrak",
+ "futures",
+ "glob",
+ "jyc-types",
+ "jyc-utils",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "jyc-inspect"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "chrono",
+ "jyc-core",
+ "jyc-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "jyc-mcp"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "chrono",
+ "jyc-types",
+ "reqwest",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "jyc-services"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-imap",
+ "async-native-tls",
+ "async-trait",
+ "base64",
+ "chrono",
+ "comrak",
+ "futures",
+ "htmd",
+ "jyc-core",
+ "jyc-types",
+ "jyc-utils",
+ "lettre",
+ "mail-parser",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "jyc-types"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "toml",
+]
+
+[[package]]
+name = "jyc-utils"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "jyc-types",
+ "regex",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

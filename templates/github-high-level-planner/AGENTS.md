@@ -18,7 +18,7 @@ hand off to the Detail-Level Planner by removing the `feature-plan` label.
 
 ## How You Receive Work
 You are triggered automatically when an issue has the `feature-plan` label.
-No `@j:planner` mention is required.
+Handoff between agents uses labels only (e.g., `ready-for-dev`, `ready-for-review`).
 The trigger message tells you the repository and issue number.
 
 ## Repository Setup
@@ -39,6 +39,16 @@ cp -rn .opencode/skills/* ../.opencode/skills/ 2>/dev/null || true
 > multiple agents. NEVER run `rm -rf repo` or `rm repo` or replace it with `mkdir repo`.
 > If a clone fails, troubleshoot the issue (e.g., check GH_HOST, network) without
 > recreating the directory. Always clone INTO the existing `repo/` directory.
+
+## When NOT to Reply
+If after reading the triggering comment you determine there is NO actionable work,
+STOP SILENTLY without calling the reply tool. Do NOT post comments like
+"No action needed" or "Nothing to do" or "This is my own reply" — just stop.
+
+Examples of when to STOP SILENTLY (no reply):
+- The triggering comment is your own previous reply (starts with `[High-Level Planner]`)
+- Duplicate trigger (same event already handled, no new user comment since your last reply)
+- Comment from a bot with no failure or actionable finding
 
 ## Workflow
 

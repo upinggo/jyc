@@ -2,6 +2,51 @@
 
 All notable changes to JYC will be documented in this file.
 
+## [0.3.0] - 2026-05-16
+
+### Added
+
+- **In-process AI agent (`jyc-agent` crate)** — replaces external OpenCode server dependency
+  - Native Anthropic Messages API provider (streaming via SSE)
+  - OpenAI-compatible provider (DeepSeek, GPT, Groq, etc.)
+  - 7 built-in tools: bash, read, write, edit, glob, grep, webfetch
+  - MCP reply_message bridge (in-process signal files, no subprocess)
+  - Core agent loop: prompt → tool_call → execute → repeat
+  - Flexible `params` config for provider/model API parameters (thinking, temperature, etc.)
+  - Per-model `context_window` configuration
+- **Raw context persistence** (`agent-context.json`) — stores provider-formatted conversation
+  exactly as sent/received, preserving provider-specific fields (DeepSeek reasoning_content, etc.)
+- **Session management** — token tracking, auto-reset at 95% context window, summarize-on-reset
+- **Event bus integration** — agent publishes ProcessingStarted/Completed, ToolStarted/ToolCompleted
+  to dashboard ActivityTracker
+- **Workspace crate structure** — project refactored into 8 workspace crates for faster incremental builds
+
+### Changed
+
+- Default agent mode changed from `"opencode"` to `"agent"`
+- Config: `model` and `system_prompt` moved from `[agent.opencode]` to `[agent]` directly
+- Config: provider definitions in `[agent.providers.*]` with per-model settings
+- `read_input_tokens()` unified — works for both old OpenCode and new agent session files
+- Token display: stores latest input_tokens (not accumulated) since full context is sent each turn
+
+### Removed
+
+- **OpenCode dependency** — no longer requires external OpenCode server process
+  - Removed `crates/jyc-services/src/opencode/` module (6 files)
+  - Removed OpenCode installation from Dockerfile
+  - Removed OpenCode volumes from docker-compose.yml
+  - Removed `model_handler.rs` (queried OpenCode's provider endpoint)
+  - Removed `reqwest-eventsource` dependency from jyc-services
+- Config: `mode = "opencode"` no longer supported (use `mode = "agent"`)
+- Config: `OpenCodeConfig` struct removed (fields moved to `AgentConfig` top level)
+
+### Fixed
+
+- DeepSeek v4-pro SSE streaming (uses EventSource instead of raw bytes_stream)
+- DeepSeek reasoning_content properly captured and round-tripped in raw context
+- Assistant messages with null content filtered on save/load/send (prevents 400 errors)
+- Empty response detection and logging for debugging provider issues
+
 ## [0.2.2] - 2026-04-30
 
 ### Added
@@ -12,11 +57,6 @@ All notable changes to JYC will be documented in this file.
   - Context files are appended to `AGENTS.md` at deploy time as project background
   - Skills from profile are merged (union, deduped) with `templates.toml` skills
   - MCPs from profile are merged (union, deduped) with `templates.toml` MCPs
-
-- **Per-repo overrides within profiles** — `--repo` flag for repo-specific configuration
-  - Profile entries support `[templates.X.repos."owner/repo"]` sub-tables
-  - Repo-specific skills, MCPs, and context_files merge on top of template defaults
-  - Deploy: `jyc templates deploy /ws --profile sap-profile.toml --repo user/fiori-app`
 
 - **SAP development skills** — New skill files for SAP projects
   - `sap-cap-ui5-dev` — CAP + UI5 development patterns
@@ -34,7 +74,7 @@ All notable changes to JYC will be documented in this file.
 - `--mcps` renamed to `--profile` (backward-compatible alias preserved)
 - `templates/sap-mcps.toml` renamed to `templates/sap-profile.toml`
 - Internal structs renamed: `ExtraMcpsConfig` → `ProfileConfig`, `ExtraMcpsEntry` → `ProfileEntry`
-- Deploy output banner shows `Profile:` and `Repo:` fields
+- Deploy output banner shows `Profile:` field
 
 ## [0.2.1] - 2026-04-26
 
@@ -65,7 +105,24 @@ All notable changes to JYC will be documented in this file.
 - Replace `Arc<AppConfig>` with `ArcSwap` for live config reload support
 - Extend inspect protocol with `reload_config` command and typed responses
 
-## [0.2.0] - 2026-04-23
+## [Unreleased]
+
+### Changed
+
+- **Refactored to Rust workspace structure** (#179) — Split single crate into 8 workspace crates:
+  - `jyc-types` — Shared types (InboundMessage, ChannelPattern, AppConfig, etc.)
+  - `jyc-utils` — Utility functions (helpers, constants, attachment validation)
+  - `jyc-core` — Core business logic (AgentService trait, ThreadManager, MessageRouter, commands)
+  - `jyc-services` — External service integrations (OpenCode, IMAP, SMTP)
+  - `jyc-channels` — Channel adapters (email, feishu, github)
+  - `jyc-inspect` — Runtime inspection server/client
+  - `jyc-mcp` — MCP tools (reply, question, vision)
+  - `jyc-cli` — CLI binary
+- Eliminated config↔channels circular dependency by merging types into jyc-types
+- AgentService trait kept in jyc-core to avoid circular deps with ThreadEventBusRef
+- Dockerfile updated for workspace structure (crate directory layout)
+
+## [0.2.1] - 2026-04-26
 
 ### Added
 
